@@ -16,7 +16,6 @@ setup(
     maintainer_email="krishna.dontaraju@gmail.com",
     description="Vision-based autonomous start signal detector",
     license="Apache-2.0",
-    tests_require=["pytest"],
     entry_points={
         "console_scripts": [
             "start_trigger_node = bot_perception.start_trigger_node:main",

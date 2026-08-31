@@ -16,7 +16,6 @@ setup(
     maintainer_email="krishna.dontaraju@gmail.com",
     description="Secondary, defense-in-depth ROS 2 watchdog node (not the primary MCU-based e-stop)",
     license="Apache-2.0",
-    tests_require=["pytest"],
     entry_points={
         "console_scripts": [
             "watchdog_node = bot_safety.watchdog_node:main",

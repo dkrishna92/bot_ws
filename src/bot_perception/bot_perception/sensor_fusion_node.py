@@ -21,6 +21,7 @@ from collections import deque
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan, Image, PointCloud, PointField
+from geometry_msgs.msg import Point
 from std_msgs.msg import Header
 from cv_bridge import CvBridge
 import cv2
@@ -153,9 +154,7 @@ class SensorFusionNode(Node):
 
         # Flatten points to xyz format
         msg.points = [
-            __import__("geometry_msgs.msg", fromlist=["Point"]).Point(
-                x=float(pt[0]), y=float(pt[1]), z=float(pt[2])
-            )
+            Point(x=float(pt[0]), y=float(pt[1]), z=float(pt[2]))
             for pt in all_points
         ]
 

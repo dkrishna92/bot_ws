@@ -20,5 +20,4 @@ setup(
     maintainer_email="krishna.dontaraju@gmail.com",
     description="Bringup: custom driver nodes and launch files for the DIY Robot Challenge vehicle",
     license="Apache-2.0",
-    tests_require=["pytest"],
 )

@@ -27,5 +27,4 @@ setup(
     maintainer_email='krishna.dontaraju@gmail.com',
     description='Gazebo simulation for the DIY Robot Challenge vehicle',
     license='Apache-2.0',
-    tests_require=['pytest'],
 )

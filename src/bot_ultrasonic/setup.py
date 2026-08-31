@@ -16,7 +16,6 @@ setup(
     maintainer_email="krishna.dontaraju@gmail.com",
     description="Ultrasonic sensor array node (HC-SR04-class, bit-banged GPIO)",
     license="Apache-2.0",
-    tests_require=["pytest"],
     entry_points={
         "console_scripts": [
             "ultrasonic_node = bot_ultrasonic.ultrasonic_node:main",

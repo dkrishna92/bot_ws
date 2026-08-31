@@ -16,7 +16,6 @@ setup(
     maintainer_email="krishna.dontaraju@gmail.com",
     description="Motor driver node for the Pololu Dual G2 High-Power Motor Driver 18v18",
     license="Apache-2.0",
-    tests_require=["pytest"],
     entry_points={
         "console_scripts": [
             "motor_node = bot_motor.motor_node:main",

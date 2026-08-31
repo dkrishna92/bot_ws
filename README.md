@@ -32,6 +32,7 @@ This keeps the application code independent from the middleware transport and ma
 cd bot_ws
 colcon build --symlink-install
 source install/setup.bash
+source /opt/ros/jazzy/setup.bash
 ```
 
 `--symlink-install` means edits to Python files take effect without
@@ -58,7 +59,13 @@ This launches the full stack with Gazebo simulation:
 
 See [src/bot_gazebo/README.md](src/bot_gazebo/README.md) for detailed simulation setup, topics, and troubleshooting.
 
-The launch file now includes RPLidar and OAK-D drivers. `robot_localization`, and Nav2 itself still need their own launch files included once those packages are installed — see the TODOs in `launch/bringup.launch.py`.
+The launch file integrates RPLidar and OAK-D drivers, but gracefully skips them if not installed (useful for laptop development). `robot_localization` and Nav2 still need their own launch files included once those packages are installed — see the TODOs in `launch/bringup.launch.py`.
+
+**To enable real sensors**, install the driver packages:
+
+```bash
+sudo apt install ros-jazzy-rplidar-ros ros-jazzy-depthai-ros-driver
+```
 
 ## Sensor Integration
 
