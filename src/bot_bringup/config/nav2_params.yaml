@@ -1,0 +1,80 @@
+# Placeholder Nav2 parameters. This is NOT tuned -- default-ish values so
+# the stack is runnable in simulation before real course geometry is known.
+# Retune costmap inflation, controller gains, and obstacle behavior once
+# the Course Layouts PDF is accessible (see CLAUDE.md open items).
+#
+# This file intentionally does not attempt to be a complete Nav2 config --
+# fill it in incrementally as you bring each piece up in Gazebo, rather
+# than guessing every parameter up front.
+
+controller_server:
+  ros__parameters:
+    controller_frequency: 20.0
+    min_x_velocity_threshold: 0.001
+    min_theta_velocity_threshold: 0.001
+    progress_checker_plugin: "progress_checker"
+    goal_checker_plugins: ["goal_checker"]
+    controller_plugins: ["FollowPath"]
+
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.05
+      movement_time_allowance: 10.0
+
+    goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.1
+      yaw_goal_tolerance: 0.15
+
+    FollowPath:
+      plugin: "dwb_core::DWBLocalPlanner"
+      # TODO: retune all of these against the actual course dimensions
+      # (min track width 20" -> tight corridors, keep footprint conservative)
+      max_vel_x: 1.0
+      min_vel_x: 0.0
+      max_vel_theta: 2.0
+      acc_lim_x: 1.5
+      acc_lim_theta: 3.0
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 10.0
+      publish_frequency: 10.0
+      global_frame: odom
+      robot_base_frame: base_link
+      rolling_window: true
+      width: 3
+      height: 3
+      resolution: 0.05
+      plugins: ["obstacle_layer", "range_layer", "inflation_layer"]
+
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 0.5
+          clearing: true
+          marking: true
+
+      range_layer:
+        plugin: "nav2_costmap_2d::RangeSensorLayer"
+        topics: ["/ultrasonic/front_left", "/ultrasonic/front_right", "/ultrasonic/rear"]
+
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        # robot is 16" wide (~0.41m); TODO tune inflation radius against
+        # actual course obstacle spacing once known
+        inflation_radius: 0.3
+        cost_scaling_factor: 3.0
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_link
+      resolution: 0.05
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]

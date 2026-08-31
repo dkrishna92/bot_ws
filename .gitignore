@@ -1,0 +1,15 @@
+.vscode/
+.claude/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ROS 2 common ignores
+build/
+install/
+log/
+*.bag
+*.db3
+*.pcap
+*.log   

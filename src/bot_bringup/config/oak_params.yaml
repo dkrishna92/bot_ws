@@ -1,0 +1,22 @@
+depthai:
+  oak_d_lite_node:
+    ros__parameters:
+      device_type: "OAK-D-S2"
+      usb_port_id: ""
+      camera_i_stereo_depth_align: "rgb"
+
+      # RGB camera
+      rgb_stereo_node_xout_rgb: "rgb"
+      spatial_detection_node_input_stereo_depth: "stereo_depth"
+
+      # Depth
+      stereo_depth_node_preset: "HighDensity"
+
+      # Publishing
+      publish_tf: true
+      tf_prefix: "oak"
+      camera_model: "OAK-D"
+
+      # Frame IDs
+      rgb_camera_optical_frame: "oak_rgb_camera_optical_frame"
+      stereo_depth_frame: "oak_stereo_depth_frame"

@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>bot_motor</name>
+  <version>0.1.0</version>
+  <description>Motor driver node for the Pololu Dual G2 High-Power Motor Driver 18v18 (PWM + DIR + SLEEP GPIO, no serial/I2C interface). Converts /cmd_vel into per-channel duty cycle for a differential drivetrain.</description>
+  <maintainer email="krishna.dontaraju@gmail.com">Krishna</maintainer>
+  <license>Apache-2.0</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <!-- pigpio (hardware-timed PWM) has no standard rosdep key: apt install
+       python3-pigpio and enable the pigpiod service on the Pi (see
+       motor_node.py docstring for the exact command). Not required on dev
+       machines; motor_node runs in dry-run mode without it. -->
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
