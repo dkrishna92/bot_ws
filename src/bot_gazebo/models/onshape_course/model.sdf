@@ -1,0 +1,26 @@
+<?xml version="1.0" ?>
+<sdf version="1.8">
+  <model name="onshape_course">
+    <static>true</static>
+    <link name="link">
+      <visual name="visual">
+        <geometry>
+          <mesh>
+            <!-- Update this path to match your STL filename -->
+            <uri>model://onshape_course/meshes/course_layout.stl</uri>
+            <scale>1.0 1.0 1.0</scale>
+          </mesh>
+        </geometry>
+      </visual>
+      <collision name="collision">
+        <geometry>
+          <mesh>
+            <!-- Update this path to match your STL filename -->
+            <uri>model://onshape_course/meshes/course_layout.stl</uri>
+            <scale>1.0 1.0 1.0</scale>
+          </mesh>
+        </geometry>
+      </collision>
+    </link>
+  </model>
+</sdf>

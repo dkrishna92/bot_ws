@@ -104,13 +104,39 @@ runs fine on a laptop for testing everything except actual hardware I/O.
 See CLAUDE.md's "Development workflow" section for the full laptop → Pi 5
 pipeline (including using Gazebo for Nav2 tuning before touching hardware).
 
+## Navigation (Nav2)
+
+Nav2 is integrated for autonomous path planning and obstacle-aware navigation:
+
+- **Planner**: Hybrid A* (`SmacPlannerHybrid`) for non-holonomic differential drive
+- **Local controller**: DWB (Dynamic Window Approach) with velocity limiting
+- **Costmap layers**:
+  - Lidar obstacle layer from `/scan`
+  - Range sensor layer from ultrasonic sensors
+  - Inflation layer with tunable radius (currently 0.3m)
+- **Localization**: `robot_localization` EKF fuses odometry sources
+- **Recovery behaviors**: spin, back_up, wait
+
+Configuration files:
+
+- [config/nav2_params.yaml](config/nav2_params.yaml) — planner, controller, costmap params (placeholders, needs tuning)
+- [config/ekf_params.yaml](config/ekf_params.yaml) — odometry fusion settings
+- Behavior tree: `navigate_w_replanning_and_recovery.xml` (from nav2_bringup)
+
+**To install Nav2:**
+
+```bash
+sudo apt install ros-jazzy-nav2-bringup ros-jazzy-robot-localization
+```
+
+Both packages are optional—launch proceeds without them if not installed (useful for laptop development).
+
 ## Status
 
-Nodes are structurally complete and sensor drivers are now integrated, but:
-- Nav2 params are placeholders, not tuned (see `config/nav2_params.yaml`)
-- OAK-D intrinsics in sensor_fusion_node are placeholder — replace with actual
-  calibration from your camera
-- `robot_localization` EKF node still needs to be launched (see TODO in
-  `launch/bringup.launch.py`)
-- Nav2 itself still needs to be launched (see TODO in `launch/bringup.launch.py`)
+Full stack is now integrated and ready for tuning, but:
+
+- Nav2 params are placeholders, not tuned against actual course geometry (see `config/nav2_params.yaml`)
+- EKF odometry fusion params are placeholder — tune against actual wheel slip and sensor noise
+- OAK-D camera intrinsics in sensor_fusion_node are placeholder — replace with actual calibration
+- Map server not yet wired (no map file; Nav2 will use SLAM or occupy grids for now)
 - E-stop MCU firmware isn't part of this repo at all yet

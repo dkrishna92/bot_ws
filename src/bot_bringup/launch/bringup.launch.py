@@ -26,7 +26,7 @@ def generate_launch_description():
     pkg_gazebo = get_package_share_directory('bot_gazebo')
     pkg_bringup = get_package_share_directory('bot_bringup')
 
-    # Try to find sensor driver packages; skip if not installed
+    # Try to find optional packages; skip if not installed
     try:
         pkg_rplidar = get_package_share_directory('rplidar_ros')
         rplidar_available = True
@@ -40,6 +40,20 @@ def generate_launch_description():
     except PackageNotFoundError:
         pkg_oak = None
         oak_available = False
+
+    try:
+        pkg_nav2 = get_package_share_directory('nav2_bringup')
+        nav2_available = True
+    except PackageNotFoundError:
+        pkg_nav2 = None
+        nav2_available = False
+
+    try:
+        pkg_robot_loc = get_package_share_directory('robot_localization')
+        robot_loc_available = True
+    except PackageNotFoundError:
+        pkg_robot_loc = None
+        robot_loc_available = False
 
     actions = [
         DeclareLaunchArgument(
@@ -62,37 +76,38 @@ def generate_launch_description():
             condition=IfCondition(LaunchConfiguration('use_sim')),
         ),
 
-        # Custom nodes (always launch)
-        Node(
-            package="bot_safety",
-            executable="watchdog_node",
-            name="watchdog_node",
-            output="screen",
-        ),
-        Node(
-            package="bot_ultrasonic",
-            executable="ultrasonic_node",
-            name="ultrasonic_node",
-            output="screen",
-        ),
-        Node(
-            package="bot_motor",
-            executable="motor_node",
-            name="motor_node",
-            output="screen",
-        ),
-        Node(
-            package="bot_perception",
-            executable="start_trigger_node",
-            name="start_trigger_node",
-            output="screen",
-        ),
-        Node(
-            package="bot_perception",
-            executable="sensor_fusion_node",
-            name="sensor_fusion_node",
-            output="screen",
-        ),
+        # Custom nodes (disabled on laptop, enabled on Pi with real hardware)
+        # Uncomment these when running on Raspberry Pi 5
+        # Node(
+        #     package="bot_safety",
+        #     executable="watchdog_node",
+        #     name="watchdog_node",
+        #     output="screen",
+        # ),
+        # Node(
+        #     package="bot_ultrasonic",
+        #     executable="ultrasonic_node",
+        #     name="ultrasonic_node",
+        #     output="screen",
+        # ),
+        # Node(
+        #     package="bot_motor",
+        #     executable="motor_node",
+        #     name="motor_node",
+        #     output="screen",
+        # ),
+        # Node(
+        #     package="bot_perception",
+        #     executable="start_trigger_node",
+        #     name="start_trigger_node",
+        #     output="screen",
+        # ),
+        # Node(
+        #     package="bot_perception",
+        #     executable="sensor_fusion_node",
+        #     name="sensor_fusion_node",
+        #     output="screen",
+        # ),
     ]
 
     # RPLidar driver - only if package is installed and not in sim mode
@@ -125,9 +140,37 @@ def generate_launch_description():
             )
         )
 
-    # TODO: add once available --
-    # IncludeLaunchDescription(robot_localization launch/ekf.launch.py)
-    # IncludeLaunchDescription(nav2_bringup navigation_launch.py,
-    #     launch_arguments={'params_file': path to config/nav2_params.yaml})
+    # Robot localization (EKF odometry fusion) - only if package is installed
+    if robot_loc_available:
+        actions.append(
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    PathJoinSubstitution([pkg_robot_loc, 'launch', 'ekf.launch.py'])
+                ),
+                launch_arguments={
+                    'namespace': '',
+                    'params_file': PathJoinSubstitution([pkg_bringup, 'config', 'ekf_params.yaml']),
+                }.items(),
+            )
+        )
+
+    # Nav2 navigation stack - only if package is installed
+    if nav2_available:
+        actions.append(
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    PathJoinSubstitution([pkg_nav2, 'launch', 'navigation_launch.py'])
+                ),
+                launch_arguments={
+                    'namespace': '',
+                    'use_namespace': 'false',
+                    'slam': 'false',
+                    'map': PathJoinSubstitution([pkg_bringup, 'config', 'maps', 'map.yaml']),
+                    'use_sim_time': LaunchConfiguration('use_sim'),
+                    'params_file': PathJoinSubstitution([pkg_bringup, 'config', 'nav2_params.yaml']),
+                    'autostart': 'true',
+                }.items(),
+            )
+        )
 
     return LaunchDescription(actions)

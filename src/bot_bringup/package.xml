@@ -16,8 +16,8 @@
   <exec_depend>bot_gazebo</exec_depend>
   <exec_depend>rplidar_ros</exec_depend>
   <exec_depend>depthai_ros_driver</exec_depend>
-  <!-- TODO: add nav2_bringup, robot_localization
-       once confirmed available for Jazzy on your setup -->
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>robot_localization</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

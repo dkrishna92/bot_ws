@@ -5,7 +5,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, Command, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, Command, PathJoinSubstitution, TextSubstitution
 from launch_ros.actions import Node
 from launch.conditions import IfCondition, UnlessCondition
 
@@ -17,7 +17,6 @@ def generate_launch_description():
     pkg_ros_gz = get_package_share_directory('ros_gz_sim')
 
     # File paths
-    world_file = os.path.join(pkg_gazebo, 'worlds', 'obstacle_course.world')
     urdf_file = os.path.join(pkg_gazebo, 'urdf', 'bot.urdf.xacro')
 
     # LaunchConfiguration references
@@ -30,8 +29,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'world',
-            default_value=world_file,
-            description='Full path to world file',
+            default_value='obstacle_course',
+            description='World to load: obstacle_course, speed_course, or onshape_course',
         ),
         DeclareLaunchArgument(
             'headless',
@@ -58,7 +57,13 @@ def generate_launch_description():
                 os.path.join(pkg_ros_gz, 'launch', 'gz_sim.launch.py')
             ),
             launch_arguments={
-                'gz_args': [world_arg, ' -v 4'],
+                'gz_args': Command([
+                    'echo ',
+                    os.path.join(pkg_gazebo, 'worlds'),
+                    '/',
+                    world_arg,
+                    '.world -v 4'
+                ]),
                 'on_exit_shutdown': 'true',
             }.items(),
         ),
