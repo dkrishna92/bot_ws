@@ -3,7 +3,7 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, Command, PathJoinSubstitution, TextSubstitution
 from launch_ros.actions import Node
@@ -26,11 +26,18 @@ def generate_launch_description():
     # Generate URDF from Xacro
     robot_description_content = Command(['xacro ', urdf_file])
 
+    # Set environment for Gazebo to find models
+    gz_resource_path = os.path.join(pkg_gazebo, 'models')
+
     return LaunchDescription([
+        SetEnvironmentVariable(
+            'GZ_SIM_RESOURCE_PATH',
+            gz_resource_path,
+        ),
         DeclareLaunchArgument(
             'world',
-            default_value='obstacle_course',
-            description='World to load: obstacle_course, speed_course, or onshape_course',
+            default_value='obstacle_course_cfr',
+            description='World to load: obstacle_course_cfr, speed_course_cfr, obstacle_course, speed_course, or onshape_course',
         ),
         DeclareLaunchArgument(
             'headless',
