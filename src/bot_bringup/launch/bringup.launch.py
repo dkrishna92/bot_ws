@@ -1,10 +1,14 @@
-"""Bringup launch file.
+"""Bringup (race) launch file.
 
 Composes the nodes owned by bot_motor, bot_ultrasonic, bot_safety, and
 bot_perception. This package intentionally contains no node
 implementations of its own -- see CLAUDE.md for why those live in
 separate per-concern packages. Sensor drivers (RPLIDAR, OAK-D) launch
 only if their packages are installed; missing drivers don't block launch.
+
+Nav2 here localizes against a pre-built map (amcl + map_server) rather
+than building one -- run mapping.launch.py first to produce
+config/maps/map.yaml for the course you're about to race on.
 
 Usage:
     # Run with actual hardware (sensors must be installed)
@@ -154,17 +158,22 @@ def generate_launch_description():
             )
         )
 
-    # Nav2 navigation stack - only if package is installed
+    # Nav2 full stack (amcl + map_server localization against the map built
+    # by mapping.launch.py, plus navigation) - only if package is installed
     if nav2_available:
         actions.append(
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
-                    PathJoinSubstitution([pkg_nav2, 'launch', 'navigation_launch.py'])
+                    PathJoinSubstitution([pkg_nav2, 'launch', 'bringup_launch.py'])
                 ),
                 launch_arguments={
                     'namespace': '',
                     'use_namespace': 'false',
-                    'slam': 'false',
+                    # nav2_bringup's bringup_launch.py builds this into a
+                    # PythonExpression string and eval()s it directly, so it
+                    # must be a real Python bool literal (capitalized), not
+                    # the lowercase 'true'/'false' used elsewhere here.
+                    'slam': 'False',
                     'map': PathJoinSubstitution([pkg_bringup, 'config', 'maps', 'map.yaml']),
                     'use_sim_time': LaunchConfiguration('use_sim'),
                     'params_file': PathJoinSubstitution([pkg_bringup, 'config', 'nav2_params.yaml']),

@@ -18,6 +18,8 @@
   <exec_depend>depthai_ros_driver</exec_depend>
   <exec_depend>nav2_bringup</exec_depend>
   <exec_depend>robot_localization</exec_depend>
+  <exec_depend>slam_toolbox</exec_depend>
+  <exec_depend>bot_explore</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

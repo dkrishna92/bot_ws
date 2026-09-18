@@ -41,13 +41,19 @@ Split (2026-08-12) into one ROS 2 package per node, rather than bundling
 everything into `bot_bringup`:
 
 - `bot_bringup` — launch files and config only, no node implementations.
-  Composes the packages below (and eventually rplidar_ros,
-  depthai_ros_driver, nav2_bringup, robot_localization).
+  Composes the packages below plus rplidar_ros, depthai_ros_driver,
+  nav2_bringup, and robot_localization (each optional/skip-if-not-installed).
+  Two entry points: `mapping.launch.py` (build a course map, see below) and
+  `bringup.launch.py` (the race launch, localizes against that map).
 - `bot_motor` — motor_node (Pololu G2 driver)
 - `bot_ultrasonic` — ultrasonic_node (HC-SR04 array)
 - `bot_safety` — watchdog_node (secondary, defense-in-depth watchdog — see
   Safety architecture below; NOT the primary MCU e-stop)
 - `bot_perception` — start_trigger_node (vision-based start signal)
+- `bot_gazebo` — the `bot` URDF/xacro, gz-sim launch/bridge config, and the
+  CFR speed/obstacle course world files (see GAZEBO_WORLDS.md)
+- `bot_explore` — frontier_explore_node: drives autonomous SLAM mapping for
+  `bot_bringup/launch/mapping.launch.py` (no teleop needed)
 
 Reasoning: each node has different hardware/library dependencies (pigpio,
 RPi.GPIO, pyserial, cv_bridge/OpenCV) that don't belong on a single
@@ -101,7 +107,12 @@ Laptop-first, Pi 5 for final integration:
    USB on x86_64 — validate driver/perception nodes against real sensor data
    without needing the Pi
 3. Laptop + Gazebo: tune Nav2 (costmap, planner, obstacle behavior) in
-   simulation before touching hardware
+   simulation before touching hardware. Two-phase launch: run
+   `mapping.launch.py` once per course/world (autonomous frontier
+   exploration via `bot_explore` + slam_toolbox, saves a map — no teleop),
+   then `bringup.launch.py` (amcl + map_server localize against that map,
+   full Nav2 stack drives). See `bot_bringup/launch/mapping.launch.py`'s
+   docstring for exact commands.
 4. Pi 5: deploy full stack, swap in real GPIO-based motor/ultrasonic nodes
    (RPi.GPIO/pigpio only work on actual Pi hardware — mock or skip these
    nodes on the laptop)
@@ -110,11 +121,14 @@ Laptop-first, Pi 5 for final integration:
 ## Open items / things not yet resolved
 
 - Exact RPLIDAR model and baudrate
-- Course layout / obstacle geometry (SharePoint resources were inaccessible
-  as of last check — review once available, will drive obstacle costmap
-  tuning and path planning specifics)
+- Course layout / obstacle geometry: official SharePoint resources still
+  inaccessible, but a teammate (D Turner) imported CFR speed/obstacle course
+  geometry into Gazebo world files (`bot_gazebo/worlds/*_cfr.world`) from
+  CAD, close enough to drive Nav2 tuning in sim in the meantime
 - Perception sensor spec confirmation (camera-only CV vs added depth/LiDAR
-  for obstacle detection) — pending same course documentation
+  for obstacle detection) — pending official course documentation
 - E-stop MCU firmware not yet written
-- Nav2 params (costmap inflation, controller gains) are placeholder-only in
-  this repo — need real tuning against actual course geometry
+- Nav2 params: `robot_radius` now matches `bot.urdf.xacro`'s real footprint
+  and the map-then-race launch wiring (mapping.launch.py / bringup.launch.py)
+  is in place, but costmap inflation and controller gains are still
+  untuned against real (non-CAD) course geometry

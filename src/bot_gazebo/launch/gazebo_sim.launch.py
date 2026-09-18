@@ -75,6 +75,21 @@ def generate_launch_description():
             }.items(),
         ),
 
+        # Spawn the robot from the published robot_description, at the
+        # course start pose (previously occupied by the placeholder "slash" model)
+        Node(
+            package='ros_gz_sim',
+            executable='create',
+            arguments=[
+                '-topic', 'robot_description',
+                '-name', 'bot',
+                '-x', '-0.7',
+                '-y', '0.0',
+                '-z', '0.0',
+            ],
+            output='screen',
+        ),
+
         # Publish static transform: map -> odom
         Node(
             package='tf2_ros',

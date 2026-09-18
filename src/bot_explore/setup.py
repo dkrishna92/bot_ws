@@ -1,8 +1,6 @@
 from setuptools import find_packages, setup
-import os
-from glob import glob
 
-package_name = "bot_bringup"
+package_name = "bot_explore"
 
 setup(
     name=package_name,
@@ -11,14 +9,16 @@ setup(
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
-        (os.path.join("share", package_name, "launch"), glob("launch/*.launch.py")),
-        (os.path.join("share", package_name, "config"), glob("config/*.yaml")),
-        (os.path.join("share", package_name, "config", "maps"), glob("config/maps/*")),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
     maintainer="Krishna",
     maintainer_email="krishna.dontaraju@gmail.com",
-    description="Bringup: custom driver nodes and launch files for the DIY Robot Challenge vehicle",
+    description="Autonomous frontier exploration for mapping runs",
     license="Apache-2.0",
+    entry_points={
+        "console_scripts": [
+            "frontier_explore_node = bot_explore.frontier_explore_node:main",
+        ],
+    },
 )

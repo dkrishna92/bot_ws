@@ -59,7 +59,7 @@ This launches the full stack with Gazebo simulation:
 
 See [src/bot_gazebo/README.md](src/bot_gazebo/README.md) for detailed simulation setup, topics, and troubleshooting.
 
-The launch file integrates RPLidar and OAK-D drivers, but gracefully skips them if not installed (useful for laptop development). `robot_localization` and Nav2 still need their own launch files included once those packages are installed — see the TODOs in `launch/bringup.launch.py`.
+The launch file integrates RPLidar and OAK-D drivers, but gracefully skips them if not installed (useful for laptop development). `robot_localization` and the full Nav2 stack (amcl + map_server + navigation) are already wired into `bringup.launch.py` when those packages are installed — but Nav2 needs a map to localize against first. Build one with `ros2 launch bot_bringup mapping.launch.py use_sim:=true` (autonomous frontier exploration, no teleop needed — see that launch file's docstring), then `colcon build --packages-select bot_bringup` before running the race launch below.
 
 **To enable real sensors**, install the driver packages:
 
@@ -135,8 +135,8 @@ Both packages are optional—launch proceeds without them if not installed (usef
 
 Full stack is now integrated and ready for tuning, but:
 
-- Nav2 params are placeholders, not tuned against actual course geometry (see `config/nav2_params.yaml`)
+- Nav2 costmap inflation / controller gains are still placeholders, not tuned against actual course geometry (see `config/nav2_params.yaml`); `robot_radius` has been corrected to match the real robot footprint
 - EKF odometry fusion params are placeholder — tune against actual wheel slip and sensor noise
 - OAK-D camera intrinsics in sensor_fusion_node are placeholder — replace with actual calibration
-- Map server not yet wired (no map file; Nav2 will use SLAM or occupy grids for now)
+- Map server is wired (amcl + map_server in `bringup.launch.py`), but it needs a map built first via `mapping.launch.py` (autonomous SLAM exploration, see above) — nothing is checked into `config/maps/` yet
 - E-stop MCU firmware isn't part of this repo at all yet
