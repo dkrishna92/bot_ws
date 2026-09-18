@@ -40,18 +40,28 @@ class FrontierExploreNode(Node):
     def __init__(self):
         super().__init__("frontier_explore_node")
 
-        self.declare_parameter("min_frontier_size", 6)  # cells
+        self.declare_parameter("min_frontier_size", 10)  # cells -- filters out tiny noise-driven clusters
         self.declare_parameter("goal_blacklist_radius_m", 0.4)
+        # Frontiers closer than this are skipped when a farther one exists --
+        # otherwise the picker keeps choosing spots immediately next to the
+        # robot, which only need an in-place rotation instead of real travel.
+        self.declare_parameter("min_goal_distance_m", 0.5)
         self.declare_parameter("map_topic", "map")
         self.declare_parameter("save_map_name", "src/bot_bringup/config/maps/map")
         self.declare_parameter("planning_period_s", 2.0)
 
         self._min_frontier_size = self.get_parameter("min_frontier_size").value
         self._blacklist_radius = self.get_parameter("goal_blacklist_radius_m").value
+        self._min_goal_distance = self.get_parameter("min_goal_distance_m").value
         self._save_map_name = self.get_parameter("save_map_name").value
 
         self._map: OccupancyGrid | None = None
         self._blacklist: list[tuple[float, float]] = []
+        # Last goal successfully reached -- if the next pick is the same
+        # point, the frontier there is a sensor blind spot (e.g. a corner
+        # the planar lidar can't see around) that will never resolve by
+        # revisiting it, so it gets blacklisted instead of re-navigated to.
+        self._last_visited_goal: tuple[float, float] | None = None
         self._planning_period_s = self.get_parameter("planning_period_s").value
 
         self._tf_buffer = Buffer()
@@ -142,15 +152,20 @@ class FrontierExploreNode(Node):
 
     def _pick_goal(self, pose: tuple[float, float]) -> tuple[float, float] | None:
         px, py = pose
-        best, best_dist = None, math.inf
+        candidates = []
         for wx, wy, _size in self._find_frontiers():
             if any(math.hypot(wx - bx, wy - by) < self._blacklist_radius
                    for bx, by in self._blacklist):
                 continue
-            dist = math.hypot(wx - px, wy - py)
-            if dist < best_dist:
-                best, best_dist = (wx, wy), dist
-        return best
+            candidates.append((math.hypot(wx - px, wy - py), (wx, wy)))
+        if not candidates:
+            return None
+
+        # Prefer the nearest frontier that still requires real forward
+        # travel; only fall back to a closer one if nothing farther exists.
+        far_enough = [c for c in candidates if c[0] >= self._min_goal_distance]
+        pool = far_enough if far_enough else candidates
+        return min(pool, key=lambda c: c[0])[1]
 
     def _save_map(self) -> None:
         if not self._save_map_client.wait_for_service(timeout_sec=5.0):
@@ -183,6 +198,16 @@ class FrontierExploreNode(Node):
                 return
             self._found_any_frontier = True
 
+            if self._last_visited_goal is not None and math.hypot(
+                goal[0] - self._last_visited_goal[0], goal[1] - self._last_visited_goal[1]
+            ) < self._blacklist_radius:
+                self.get_logger().warn(
+                    f"Frontier at {goal} reappeared right after being visited -- "
+                    "likely a sensor blind spot; blacklisting instead of retrying."
+                )
+                self._blacklist.append(goal)
+                continue
+
             goal_pose = PoseStamped()
             goal_pose.header.frame_id = "map"
             goal_pose.header.stamp = self.get_clock().now().to_msg()
@@ -200,6 +225,8 @@ class FrontierExploreNode(Node):
                 self.get_logger().warn(f"Frontier goal {goal} did not succeed "
                                         f"({result}); blacklisting.")
                 self._blacklist.append(goal)
+            else:
+                self._last_visited_goal = goal
 
 
 def main(args=None):

@@ -136,6 +136,11 @@ def generate_launch_description():
                 # robot_state_publisher to compute base_link -> *_wheel TF.
                 ['/world/', world_arg, '/model/bot/joint_state',
                  '@sensor_msgs/msg/JointState[gz.msgs.Model'],
+                # Diagnostic contact sensor from bot.urdf.xacro -- lets real
+                # collisions (e.g. clipping a bale) be observed directly via
+                # `ros2 topic echo /bot_contacts` instead of inferred from
+                # TF/cmd_vel mismatches.
+                '/bot_contacts@ros_gz_interfaces/msg/Contacts[gz.msgs.Contacts',
             ],
             remappings=[
                 (['/world/', world_arg, '/model/bot/joint_state'], 'joint_states'),

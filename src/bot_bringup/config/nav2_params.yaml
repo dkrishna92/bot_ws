@@ -101,8 +101,11 @@ controller_server:
       stateful: true
       critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign"]
       BaseObstacle:
-          scale: 0.02
-          max_scaling_factor: 0.02
+          # 0.3 overpowered PathAlign/GoalAlign in the tight corridor,
+          # making the robot back away from obstacles ahead instead of
+          # continuing to follow the path -- 0.1 is a middle ground.
+          scale: 0.1
+          max_scaling_factor: 0.1
           scoring_pose_frame: "base_link"
       GoalAlign:
           scale: 24.0
@@ -111,11 +114,19 @@ controller_server:
           scale: 32.0
           forward_point_distance: 0.325
       RotateToGoal:
-          scale: 32.0
+          # Lowered from 32 -- tied with PathAlign, RotateToGoal was
+          # dominating trajectory scoring and making the robot repeatedly
+          # spin in place to face the path instead of driving forward
+          # along it in tight corridors.
+          scale: 8.0
           slowing_factor: 5.0
           lookahead_time: -1.0
       Oscillation:
           scale: 1.0
+          # Requires more forward progress before a reversal trajectory is
+          # allowed again -- default 0.05m let the robot flip-flop forward
+          # and backward almost immediately.
+          oscillation_reset_dist: 0.3
 
 local_costmap:
   local_costmap:
@@ -129,6 +140,13 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
+      # 0.37 is the true circumscribed-circle radius of the 24x16in chassis
+      # (sqrt((0.61/2)^2+(0.41/2)^2)), matching bot.urdf.xacro's actual
+      # base_link collision box. Do NOT shrink this below the real footprint
+      # -- doing so let Nav2 plan through gaps the simulated robot's actual
+      # collision geometry can't fit through, causing real Gazebo collisions
+      # (chassis clipping bales) that looked like a DWB tuning problem
+      # ("drives forward then gets pushed back") but were actually physics.
       robot_radius: 0.37
       plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
@@ -158,6 +176,7 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_link
+      # See local_costmap's robot_radius comment above -- same caveat applies.
       robot_radius: 0.37
       resolution: 0.05
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
@@ -185,22 +204,15 @@ planner_server:
     use_sim_time: True
     expected_planner_frequency: 20.0
     planner_plugins: ["GridBased"]
+    # NavFn, not SmacPlannerHybrid -- this robot is skid-steer diff-drive
+    # (can rotate in place), so it doesn't need Reeds-Shepp's non-holonomic
+    # minimum-turning-radius constraints, which were causing "exceeded
+    # maximum iterations" in the tight corridor near the course start.
     GridBased:
-      plugin: "nav2_smac_planner::SmacPlannerHybrid"
-      downsample_costmap: false
-      downsampling_factor: 1
+      plugin: "nav2_navfn_planner::NavfnPlanner"
+      tolerance: 0.25
+      use_astar: true
       allow_unknown: true
-      max_iterations: 1000
-      max_planning_time: 3.5
-      motion_model_for_search: "REEDS_SHEPP"
-      cost_travel_multiplier: 2.0
-      angle_quantization_bins: 72
-      analytic_expansion_ratio: 3.5
-      analytic_expansion_max_length: 3.0
-      minimum_turning_radius: 0.20
-      reverse_penalty: 2.0
-      at_goal_xy_tolerance: 0.1
-      at_goal_theta_tolerance: 0.1
 
 smoother_server:
   ros__parameters:

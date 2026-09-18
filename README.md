@@ -108,7 +108,9 @@ pipeline (including using Gazebo for Nav2 tuning before touching hardware).
 
 Nav2 is integrated for autonomous path planning and obstacle-aware navigation:
 
-- **Planner**: Hybrid A* (`SmacPlannerHybrid`) for non-holonomic differential drive
+- **Planner**: `NavFn` (A*) -- this robot is skid-steer diff-drive (can rotate
+  in place), so it doesn't need SmacPlannerHybrid's non-holonomic
+  Reeds-Shepp motion model
 - **Local controller**: DWB (Dynamic Window Approach) with velocity limiting
 - **Costmap layers**:
   - Lidar obstacle layer from `/scan`

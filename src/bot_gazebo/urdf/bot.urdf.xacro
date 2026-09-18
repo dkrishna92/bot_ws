@@ -155,6 +155,24 @@
   <!-- Gazebo plugins -->
   <gazebo reference="base_link">
     <material>Gazebo/Blue</material>
+    <!-- Diagnostic contact sensor - publishes actual collision events for
+         base_link so real collisions (e.g. clipping a bale) can be observed
+         directly instead of inferred from TF/cmd_vel mismatches. Requires
+         the gz-sim-contact-system plugin to be loaded on the world (see
+         bot_gazebo/worlds/*_cfr.world) - unlike camera/lidar, contact
+         sensors produce no output at all without it. "collision" is
+         sdformat_urdf's default generated name for base_link's single,
+         unnamed URDF <collision> element; if this sensor stays silent,
+         verify the real name via `gz topic -l | grep contact`.
+         An explicit <topic> avoids having to guess gz-sim's auto-generated
+         hierarchical topic name when bridging in gazebo_sim.launch.py. -->
+    <sensor name="base_contact_sensor" type="contact">
+      <contact>
+        <collision>collision</collision>
+        <topic>/bot_contacts</topic>
+      </contact>
+      <update_rate>30</update_rate>
+    </sensor>
   </gazebo>
 
   <!-- Differential (skid-steer) Drive Plugin (gz-sim). Two joints per side,
