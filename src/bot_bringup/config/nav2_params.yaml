@@ -197,7 +197,7 @@ planner_server:
       angle_quantization_bins: 72
       analytic_expansion_ratio: 3.5
       analytic_expansion_max_length: 3.0
-      minimum_turning_radius: 0.40
+      minimum_turning_radius: 0.20
       reverse_penalty: 2.0
       at_goal_xy_tolerance: 0.1
       at_goal_theta_tolerance: 0.1
@@ -215,17 +215,14 @@ smoother_server:
 recovery_server:
   ros__parameters:
     use_sim_time: True
-    recovery_plugins: ["spin", "back_up"]
+    # back_up deliberately not registered -- no rear-facing perception
+    # sensors on this robot, so blind reversing during recovery isn't safe.
+    recovery_plugins: ["spin"]
     spin:
       plugin: "nav2_recoveries::Spin"
       simulate_ahead_time: 2.0
       max_rotations: 10.0
       max_effort: 100.0
-    back_up:
-      plugin: "nav2_recoveries::BackUp"
-      simulate_ahead_time: 2.0
-      max_backup_dist: 0.15
-      backup_speed: 0.05
 
 map_server:
   ros__parameters:

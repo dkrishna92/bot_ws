@@ -79,7 +79,9 @@ class WatchdogNode(Node):
         return self._mcu_estop_active
 
     def _tick(self) -> None:
-        stale_lidar = False
+        # Fail-safe default: no scan ever received counts as stale, not fine --
+        # otherwise a lidar that never connects never trips this fault.
+        stale_lidar = True
         if self._last_scan_time is not None:
             age = (self.get_clock().now() - self._last_scan_time).nanoseconds / 1e9
             stale_lidar = age > self._scan_timeout_s

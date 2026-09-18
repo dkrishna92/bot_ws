@@ -52,12 +52,14 @@ def generate_launch_description():
             description='Launch RViz2 with the Nav2 default view',
         ),
 
-        # Conditionally include Gazebo
+        # Conditionally include Gazebo -- slam_toolbox owns map->odom here, so tell
+        # gazebo_sim.launch.py not to also publish it
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 PathJoinSubstitution([pkg_gazebo, 'launch', 'gazebo_sim.launch.py'])
             ),
             condition=IfCondition(LaunchConfiguration('use_sim')),
+            launch_arguments={'publish_static_map_odom': 'false'}.items(),
         ),
 
         # Odometry fusion -- slam_toolbox's scan matching is more accurate

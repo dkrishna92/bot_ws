@@ -20,11 +20,14 @@ from collections import deque
 
 import rclpy
 from rclpy.node import Node
+from rclpy.time import Time
 from sensor_msgs.msg import LaserScan, Image, PointCloud, PointField
-from geometry_msgs.msg import Point
+from geometry_msgs.msg import Point32
 from std_msgs.msg import Header
 from cv_bridge import CvBridge
 import cv2
+from tf2_ros import Buffer, TransformListener
+from tf2_ros import LookupException, ConnectivityException, ExtrapolationException
 
 try:
     import depthai as dai
@@ -37,7 +40,9 @@ class SensorFusionNode(Node):
         super().__init__("sensor_fusion_node")
 
         self.declare_parameter("lidar_frame_id", "lidar_link")
-        self.declare_parameter("depth_frame_id", "oak_stereo_depth_frame")
+        # camera_link is the only camera frame currently in bot.urdf.xacro --
+        # update once depthai_ros_driver's real stereo depth frame is wired in.
+        self.declare_parameter("depth_frame_id", "camera_link")
         self.declare_parameter("buffer_size", 5)
         self.declare_parameter("depth_confidence_threshold", 200)
 
@@ -51,6 +56,9 @@ class SensorFusionNode(Node):
         self._latest_depth: np.ndarray | None = None
         self._scan_buffer = deque(maxlen=self._buffer_size)
         self._depth_buffer = deque(maxlen=self._buffer_size)
+
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self)
 
         self._pub_pointcloud = self.create_publisher(
             PointCloud, "perception/obstacles", 10
@@ -125,6 +133,24 @@ class SensorFusionNode(Node):
 
         return np.array(points) if points else np.zeros((0, 3))
 
+    def _transform_points(self, points: np.ndarray, from_frame: str, to_frame: str) -> np.ndarray:
+        """Transform a (N,3) point array between TF frames via a single lookup."""
+        if points.shape[0] == 0 or from_frame == to_frame:
+            return points
+        try:
+            t = self._tf_buffer.lookup_transform(to_frame, from_frame, Time())
+        except (LookupException, ConnectivityException, ExtrapolationException) as exc:
+            self.get_logger().warn(f"no transform {from_frame} -> {to_frame} yet: {exc}")
+            return np.zeros((0, 3))
+        tr = t.transform.translation
+        q = t.transform.rotation
+        rotation = np.array([
+            [1 - 2 * (q.y ** 2 + q.z ** 2), 2 * (q.x * q.y - q.z * q.w), 2 * (q.x * q.z + q.y * q.w)],
+            [2 * (q.x * q.y + q.z * q.w), 1 - 2 * (q.x ** 2 + q.z ** 2), 2 * (q.y * q.z - q.x * q.w)],
+            [2 * (q.x * q.z - q.y * q.w), 2 * (q.y * q.z + q.x * q.w), 1 - 2 * (q.x ** 2 + q.y ** 2)],
+        ])
+        return points @ rotation.T + np.array([tr.x, tr.y, tr.z])
+
     def _fuse_and_publish(self) -> None:
         """Fuse lidar and depth data, publish as PointCloud."""
         if self._latest_scan is None:
@@ -133,12 +159,14 @@ class SensorFusionNode(Node):
         # Get 3D points from lidar (assumes planar environment)
         lidar_points = self._lidar_to_3d(self._latest_scan)
 
-        # Get 3D points from depth camera
-        depth_points = (
+        # Get 3D points from depth camera, transformed out of the camera frame
+        # into the lidar frame so the two point sets are actually comparable
+        depth_points_cam = (
             self._depth_to_3d(self._latest_depth)
             if self._latest_depth is not None
             else np.zeros((0, 3))
         )
+        depth_points = self._transform_points(depth_points_cam, self._depth_frame, self._lidar_frame)
 
         # Combine: depth-based 3D + lidar planar points
         all_points = np.vstack([depth_points, lidar_points])
@@ -152,9 +180,9 @@ class SensorFusionNode(Node):
         msg.header.stamp = self._latest_scan.header.stamp
         msg.header.frame_id = self._lidar_frame
 
-        # Flatten points to xyz format
+        # Point32, not Point -- PointCloud.points requires geometry_msgs/Point32
         msg.points = [
-            Point(x=float(pt[0]), y=float(pt[1]), z=float(pt[2]))
+            Point32(x=float(pt[0]), y=float(pt[1]), z=float(pt[2]))
             for pt in all_points
         ]
 

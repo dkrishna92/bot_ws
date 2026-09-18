@@ -45,6 +45,11 @@ def generate_launch_description():
             default_value='false',
             description='Run Gazebo headless',
         ),
+        DeclareLaunchArgument(
+            'publish_static_map_odom',
+            default_value='true',
+            description='Publish a static map->odom identity TF; disable when slam_toolbox or amcl owns that transform instead',
+        ),
 
         # Publish robot description (URDF) - must be before spawn.
         # ParameterValue(..., value_type=str) forces this to be treated as
@@ -103,12 +108,13 @@ def generate_launch_description():
             output='screen',
         ),
 
-        # Publish static transform: map -> odom
+        # Publish static transform: map -> odom -- only when nothing else owns it (see publish_static_map_odom arg above)
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
             arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom'],
             output='log',
+            condition=IfCondition(LaunchConfiguration('publish_static_map_odom')),
         ),
 
         # Create a bridge for joint states and transforms

@@ -48,7 +48,9 @@ class UltrasonicNode(Node):
             pins = self.get_parameter(f"{name}_pins").value
             self._sensors[name] = {"trigger": pins[0], "echo": pins[1]}
 
-        self._publishers = {
+        # Named _range_publishers, not _publishers -- that name is rclpy's own
+        # internal Node bookkeeping list and silently shadowing it broke destroy_node().
+        self._range_publishers = {
             name: self.create_publisher(Range, f"ultrasonic/{name}", 10)
             for name in self._sensors
         }
@@ -100,7 +102,7 @@ class UltrasonicNode(Node):
             msg.min_range = 0.02
             msg.max_range = self._max_range
             msg.range = r if r is not None else self._max_range + 1.0  # out-of-range sentinel
-            self._publishers[name].publish(msg)
+            self._range_publishers[name].publish(msg)
 
     def destroy_node(self) -> None:
         if GPIO is not None:

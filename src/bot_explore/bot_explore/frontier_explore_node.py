@@ -20,6 +20,7 @@ from collections import deque
 import numpy as np
 
 import rclpy
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.time import Time
 from geometry_msgs.msg import PoseStamped
@@ -69,7 +70,19 @@ class FrontierExploreNode(Node):
         # while rclpy.spin(self) on the main thread keeps servicing the map
         # subscription and TF listener independently.
         self._nav = BasicNavigator()
+        # Without this, goals sent before Nav2's lifecycle nodes finish
+        # activating get rejected ("Action server is inactive") and
+        # wrongly blacklisted, which can exhaust the few early frontier
+        # candidates and falsely trigger "exploration complete".
+        # localizer='robot_localization' is nav2_simple_commander's sentinel
+        # for "skip the amcl-specific wait" -- this launch uses
+        # robot_localization's EKF + slam_toolbox, never amcl.
+        self._nav.waitUntilNav2Active(localizer='robot_localization')
         self._save_map_client = self.create_client(SaveMap, "/slam_toolbox/save_map")
+        # Distinguishes "map hasn't developed any free space yet" from
+        # "fully explored" -- both look like zero frontiers, but the former
+        # happens on the very first /map message and must not end the loop.
+        self._found_any_frontier = False
 
         self._explore_thread = threading.Thread(target=self._explore_loop, daemon=True)
         self._explore_thread.start()
@@ -162,8 +175,13 @@ class FrontierExploreNode(Node):
 
             goal = self._pick_goal(pose)
             if goal is None:
+                if not self._found_any_frontier:
+                    self.get_logger().info("No frontiers yet -- waiting for map to develop.")
+                    time.sleep(self._planning_period_s)
+                    continue
                 self._save_map()
                 return
+            self._found_any_frontier = True
 
             goal_pose = PoseStamped()
             goal_pose.header.frame_id = "map"
@@ -187,8 +205,15 @@ class FrontierExploreNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = FrontierExploreNode()
+    # An explicit executor here (not the rclpy.spin() convenience wrapper)
+    # avoids sharing the process-wide default executor that BasicNavigator's
+    # internal spin_until_future_complete() calls also fall back to -- both
+    # grabbing that same default executor is what causes goToPose() to raise
+    # "Executor is already spinning".
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
