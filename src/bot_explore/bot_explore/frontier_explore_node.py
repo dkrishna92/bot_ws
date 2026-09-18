@@ -13,6 +13,8 @@ doesn't lose anything here.
 from __future__ import annotations
 
 import math
+import threading
+import time
 from collections import deque
 
 import numpy as np
@@ -49,9 +51,7 @@ class FrontierExploreNode(Node):
 
         self._map: OccupancyGrid | None = None
         self._blacklist: list[tuple[float, float]] = []
-        self._last_goal: tuple[float, float] | None = None
-        self._navigating = False
-        self._done = False
+        self._planning_period_s = self.get_parameter("planning_period_s").value
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
@@ -59,10 +59,20 @@ class FrontierExploreNode(Node):
         self.create_subscription(OccupancyGrid, self.get_parameter("map_topic").value,
                                   self._on_map, 1)
 
+        # BasicNavigator's goToPose()/isTaskComplete() are blocking calls
+        # that internally do their own rclpy.spin_until_future_complete(self, ...)
+        # -- calling them from a timer callback running inside this node's
+        # own rclpy.spin() causes "RuntimeError: Executor is already
+        # spinning" (nested spin on the same executor). Running the
+        # exploration loop in its own thread instead lets BasicNavigator be
+        # used the way it's designed to be (blocking, sequential calls),
+        # while rclpy.spin(self) on the main thread keeps servicing the map
+        # subscription and TF listener independently.
         self._nav = BasicNavigator()
         self._save_map_client = self.create_client(SaveMap, "/slam_toolbox/save_map")
 
-        self.create_timer(self.get_parameter("planning_period_s").value, self._tick)
+        self._explore_thread = threading.Thread(target=self._explore_loop, daemon=True)
+        self._explore_thread.start()
 
     def _on_map(self, msg: OccupancyGrid) -> None:
         self._map = msg
@@ -138,41 +148,40 @@ class FrontierExploreNode(Node):
         self._save_map_client.call_async(request)
         self.get_logger().info(f"Exploration complete -- saving map to '{self._save_map_name}'.")
 
-    def _tick(self) -> None:
-        if self._done or self._map is None:
-            return
+    def _explore_loop(self) -> None:
+        while rclpy.ok():
+            if self._map is None:
+                time.sleep(self._planning_period_s)
+                continue
 
-        if self._navigating:
-            if not self._nav.isTaskComplete():
+            pose = self._robot_pose()
+            if pose is None:
+                self.get_logger().info("Waiting for map -> base_link transform...")
+                time.sleep(self._planning_period_s)
+                continue
+
+            goal = self._pick_goal(pose)
+            if goal is None:
+                self._save_map()
                 return
+
+            goal_pose = PoseStamped()
+            goal_pose.header.frame_id = "map"
+            goal_pose.header.stamp = self.get_clock().now().to_msg()
+            goal_pose.pose.position.x = goal[0]
+            goal_pose.pose.position.y = goal[1]
+            goal_pose.pose.orientation.w = 1.0
+            self.get_logger().info(f"Heading to frontier at ({goal[0]:.2f}, {goal[1]:.2f})")
+            self._nav.goToPose(goal_pose)
+
+            while not self._nav.isTaskComplete():
+                time.sleep(0.5)
+
             result = self._nav.getResult()
-            self._navigating = False
-            if result != TaskResult.SUCCEEDED and self._last_goal is not None:
-                self.get_logger().warn(f"Frontier goal {self._last_goal} did not succeed "
+            if result != TaskResult.SUCCEEDED:
+                self.get_logger().warn(f"Frontier goal {goal} did not succeed "
                                         f"({result}); blacklisting.")
-                self._blacklist.append(self._last_goal)
-
-        pose = self._robot_pose()
-        if pose is None:
-            self.get_logger().info("Waiting for map -> base_link transform...")
-            return
-
-        goal = self._pick_goal(pose)
-        if goal is None:
-            self._save_map()
-            self._done = True
-            return
-
-        self._last_goal = goal
-        goal_pose = PoseStamped()
-        goal_pose.header.frame_id = "map"
-        goal_pose.header.stamp = self.get_clock().now().to_msg()
-        goal_pose.pose.position.x = goal[0]
-        goal_pose.pose.position.y = goal[1]
-        goal_pose.pose.orientation.w = 1.0
-        self.get_logger().info(f"Heading to frontier at ({goal[0]:.2f}, {goal[1]:.2f})")
-        self._nav.goToPose(goal_pose)
-        self._navigating = True
+                self._blacklist.append(goal)
 
 
 def main(args=None):

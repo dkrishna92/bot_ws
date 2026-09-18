@@ -42,18 +42,25 @@ amcl:
 bt_navigator:
   ros__parameters:
     use_sim_time: True
+    global_frame: map
+    robot_base_frame: base_link
+    odom_topic: /odom
     bt_loop_duration: 10
     default_server_timeout: 20
-    default_bt_xml_filename: "navigate_w_replanning_and_recovery.xml"
-    plugin_lib_names:
-      - nav2_compute_path_to_pose_action_bt_node
-      - nav2_follow_path_action_bt_node
-      - nav2_spin_action_bt_node
-      - nav2_wait_action_bt_node
-      - nav2_back_up_action_bt_node
-      - nav2_recovery_node_bt_node
-      - nav2_pipeline_sequence_bt_node
-      - nav2_round_robin_node_bt_node
+    # No plugin_lib_names / default_bt_xml_filename here -- those are the
+    # deprecated pre-Iron config style. This Nav2 version auto-registers all
+    # standard BT nodes itself; explicitly listing them too (as this file
+    # used to) causes "ID [ComputePathToPose] already registered" and
+    # crashes bt_navigator. The XML filename we had
+    # ("navigate_w_replanning_and_recovery.xml") also didn't match any real
+    # file -- the actual ones are navigate_to_pose_w_replanning_and_recovery.xml
+    # and navigate_through_poses_w_replanning_and_recovery.xml, which are
+    # exactly what these navigator plugins default to when left unset.
+    navigators: ["navigate_to_pose", "navigate_through_poses"]
+    navigate_to_pose:
+      plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
+    navigate_through_poses:
+      plugin: "nav2_bt_navigator::NavigateThroughPosesNavigator"
 
 controller_server:
   ros__parameters:
@@ -92,7 +99,7 @@ controller_server:
       trans_stopped_velocity: 0.25
       short_circuit_trajectory_evaluation: true
       stateful: true
-      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "TrajectoryCriticContainer"]
+      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign"]
       BaseObstacle:
           scale: 0.02
           max_scaling_factor: 0.02
@@ -224,3 +231,62 @@ map_server:
   ros__parameters:
     use_sim_time: True
     yaml_filename: ""
+
+# This Nav2 version's navigation_launch.py brings up collision_monitor as a
+# standard lifecycle node regardless of whether it's actually wired into the
+# cmd_vel path -- with no config at all it fails "observation_sources is not
+# initialized" during configure and aborts the whole lifecycle bringup
+# (controller_server, bt_navigator, everything). Config below is copied
+# as-is from nav2_bringup's own reference params. It's currently a no-op:
+# nothing publishes cmd_vel_in_topic, so collision_monitor never fires and
+# controller_server's direct FollowPath -> cmd_vel publish is unaffected.
+# To actually use it as a safety layer, add a velocity_smoother publishing
+# cmd_vel_smoothed and point controller_server's output there instead of
+# straight to cmd_vel.
+collision_monitor:
+  ros__parameters:
+    use_sim_time: True
+    base_frame_id: "base_link"
+    odom_frame_id: "odom"
+    cmd_vel_in_topic: "cmd_vel_smoothed"
+    cmd_vel_out_topic: "cmd_vel"
+    state_topic: "collision_monitor_state"
+    transform_tolerance: 0.2
+    source_timeout: 1.0
+    base_shift_correction: True
+    stop_pub_timeout: 2.0
+    # An empty list here fails ROS 2 parameter type inference at startup
+    # ("polygons: No parameter value set") -- an empty array has no
+    # elements to infer element-type from. Use nav2_bringup's actual
+    # default polygon instead of trying to invent an empty/disabled one.
+    polygons: ["FootprintApproach"]
+    FootprintApproach:
+      type: "polygon"
+      action_type: "approach"
+      footprint_topic: "/local_costmap/published_footprint"
+      time_before_collision: 1.2
+      simulation_time_step: 0.1
+      min_points: 6
+      visualize: False
+      enabled: True
+    observation_sources: ["scan"]
+    scan:
+      type: "scan"
+      topic: "scan"
+      min_height: 0.15
+      max_height: 2.0
+      enabled: True
+
+# Another node navigation_launch.py brings up unconditionally (see the
+# collision_monitor comment above for the pattern) -- this project has no
+# charging dock, so dock_plugins is never actually invoked (nothing calls
+# the dock_robot/undock_robot actions), but the list can't be left empty
+# for the same array-type-inference reason as collision_monitor's polygons.
+docking_server:
+  ros__parameters:
+    use_sim_time: True
+    base_frame: "base_link"
+    fixed_frame: "odom"
+    dock_plugins: ["simple_charging_dock"]
+    simple_charging_dock:
+      plugin: "opennav_docking::SimpleChargingDock"

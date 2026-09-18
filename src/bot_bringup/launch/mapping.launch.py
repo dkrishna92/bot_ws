@@ -77,13 +77,18 @@ def generate_launch_description():
             ],
         ),
 
-        # SLAM: builds the map live from /scan as the robot moves
+        # SLAM: builds the map live from /scan as the robot moves.
+        # slam_params_file overrides slam_toolbox's own stock default, whose
+        # base_frame ("base_footprint") this robot doesn't have -- without
+        # this override slam_toolbox spins forever on "Failed to compute
+        # odom pose" and never publishes /map.
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 PathJoinSubstitution([pkg_slam_toolbox, 'launch', 'online_async_launch.py'])
             ),
             launch_arguments={
                 'use_sim_time': LaunchConfiguration('use_sim'),
+                'slam_params_file': PathJoinSubstitution([pkg_bringup, 'config', 'slam_toolbox_params.yaml']),
             }.items(),
         ),
 
