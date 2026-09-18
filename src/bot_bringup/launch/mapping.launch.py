@@ -46,6 +46,11 @@ def generate_launch_description():
             default_value='src/bot_bringup/config/maps/map',
             description='Path prefix (no extension) slam_toolbox writes the finished map to',
         ),
+        DeclareLaunchArgument(
+            'rviz',
+            default_value='true',
+            description='Launch RViz2 with the Nav2 default view',
+        ),
 
         # Conditionally include Gazebo
         IncludeLaunchDescription(
@@ -57,14 +62,19 @@ def generate_launch_description():
 
         # Odometry fusion -- slam_toolbox's scan matching is more accurate
         # with a fused odom input than raw wheel/ackermann odometry alone.
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                PathJoinSubstitution([pkg_robot_loc, 'launch', 'ekf.launch.py'])
-            ),
-            launch_arguments={
-                'namespace': '',
-                'params_file': PathJoinSubstitution([pkg_bringup, 'config', 'ekf_params.yaml']),
-            }.items(),
+        # robot_localization's own ekf.launch.py ignores 'namespace'/
+        # 'params_file' launch arguments entirely -- it hardcodes its
+        # package's example params (odom0: example/odom, no use_sim_time),
+        # so the node is launched directly with our own config instead.
+        Node(
+            package='robot_localization',
+            executable='ekf_node',
+            name='ekf_filter_node',
+            output='screen',
+            parameters=[
+                PathJoinSubstitution([pkg_bringup, 'config', 'ekf_params.yaml']),
+                {'use_sim_time': LaunchConfiguration('use_sim')},
+            ],
         ),
 
         # SLAM: builds the map live from /scan as the robot moves
@@ -103,5 +113,16 @@ def generate_launch_description():
                 'use_sim_time': LaunchConfiguration('use_sim'),
                 'save_map_name': LaunchConfiguration('map_save_path'),
             }],
+        ),
+
+        # RViz2 with Nav2's default view -- handy to watch the map fill in
+        # live as frontier_explore_node drives
+        Node(
+            package='rviz2',
+            executable='rviz2',
+            arguments=['-d', PathJoinSubstitution([pkg_nav2, 'rviz', 'nav2_default_view.rviz'])],
+            parameters=[{'use_sim_time': LaunchConfiguration('use_sim')}],
+            condition=IfCondition(LaunchConfiguration('rviz')),
+            output='screen',
         ),
     ])

@@ -50,7 +50,7 @@ currently **not wired up** — passing `headless:=true` has no effect on the
 ## Features
 
 ### Robot Model
-- **Differential drive**: two independent wheels, 0.35m track width, 0.1m wheel radius
+- **Skid-steer, 4 wheels**: `front_left`/`rear_left`/`front_right`/`rear_right`, 0.35m track width, 0.5m wheelbase, 0.1m wheel radius. No caster — matches the real drivetrain, where the Pololu G2's left channel drives both left wheels together and the right channel drives both right wheels together (see the `gz-sim-diff-drive-system` plugin's two `<left_joint>`/two `<right_joint>` tags in `bot.urdf.xacro`)
 - **Chassis**: 0.61m L × 0.41m W × 0.15m H box (within the 24"×16"×16" competition envelope — the 0.15m is chassis height only, not overall robot height with lidar/camera mounts)
 - **Mass**: 11.3 kg (25 lb competition limit)
 - Spawned via `ros_gz_sim create` reading the `robot_description` topic (published by `robot_state_publisher` from `urdf/bot.urdf.xacro` through `xacro`) — not a hardcoded model in the world file
@@ -123,11 +123,12 @@ Edit the relevant world file (e.g. `worlds/obstacle_course_cfr.world`) to adjust
 1. **No true depth sensor**: camera publishes RGB only, no depth map. For stereo depth, add a `depth_camera` sensor type to `bot.urdf.xacro`'s `<gazebo reference="camera_link">` block — gz-sim's Sensors system handles it natively, no extra plugin filename needed (unlike classic Gazebo).
 2. **`/camera/camera_info` not bridged**: add it to the `ros_gz_bridge` arguments in `gazebo_sim.launch.py` if you need calibration info on the ROS side.
 3. **No ultrasonic simulation**: real hardware only, via `bot_ultrasonic`.
-4. **`odom → base_link` TF depends on which launch file you use**, and even under the EKF it's not really fusing anything yet (see TF Frames above).
-5. **`headless:=true` is a no-op** (see Quick Start above).
-6. **Simplified wheel friction**: ODE approximation; real robot traction may differ.
-7. **No motor current/torque feedback**: the diff-drive plugin always achieves commanded velocity instantly; no acceleration/deceleration limits.
-8. **No sensor noise**: camera and lidar produce perfect data; add `<noise>` blocks to the sensor definitions in `bot.urdf.xacro` for realism.
+4. **`odom → base_link` TF depends on which launch file you use** (only present when the EKF is running, i.e. `bringup.launch.py`/`mapping.launch.py`, not bare `gazebo_sim.launch.py`).
+5. **`base_link → *_wheel` TF doesn't populate**: `gz-sim-joint-state-publisher-system` loads (confirmed in the Gazebo console) but never actually registers as a publisher on its own `/world/.../model/bot/joint_state` topic (confirmed with `gz topic -i`), even with the robot actively driving. Doesn't block driving/navigation -- `gz-sim-diff-drive-system` commands the wheel joints directly and does not depend on this. Looks like a gz-sim limitation specific to models spawned dynamically via `ros_gz_sim create` rather than declared statically in the world file; not yet root-caused.
+6. **`headless:=true` is a no-op** (see Quick Start above).
+7. **Simplified wheel friction**: ODE approximation; real robot traction may differ.
+8. **No motor current/torque feedback**: the diff-drive plugin always achieves commanded velocity instantly; no acceleration/deceleration limits.
+9. **No sensor noise**: camera and lidar produce perfect data; add `<noise>` blocks to the sensor definitions in `bot.urdf.xacro` for realism.
 
 ## Troubleshooting
 

@@ -7,6 +7,7 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetE
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, Command, PathJoinSubstitution, TextSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch.conditions import IfCondition, UnlessCondition
 
 
@@ -45,14 +46,19 @@ def generate_launch_description():
             description='Run Gazebo headless',
         ),
 
-        # Publish robot description (URDF) - must be before spawn
+        # Publish robot description (URDF) - must be before spawn.
+        # ParameterValue(..., value_type=str) forces this to be treated as
+        # a plain string; without it, launch_ros guesses the type by trying
+        # to YAML-parse the XML content, which is fragile -- content as
+        # innocuous as a colon inside an XML comment can make it look
+        # enough like a YAML mapping to fail that guess.
         Node(
             package='robot_state_publisher',
             executable='robot_state_publisher',
             output='log',
             parameters=[
                 {
-                    'robot_description': robot_description_content,
+                    'robot_description': ParameterValue(robot_description_content, value_type=str),
                     'use_sim_time': True,
                 }
             ],
@@ -64,8 +70,15 @@ def generate_launch_description():
                 os.path.join(pkg_ros_gz, 'launch', 'gz_sim.launch.py')
             ),
             launch_arguments={
+                # -r: start the simulation running instead of paused. Without
+                # it, gz sim opens paused and physics never steps until
+                # someone clicks Play in the GUI (or a /world/.../control
+                # service call unpauses it) -- likely also why DiffDrive's
+                # odometry init has been flaky, since plugin Configure()
+                # timing relative to the first physics step becomes
+                # dependent on exactly when a human (or nothing) unpauses it.
                 'gz_args': Command([
-                    'echo ',
+                    'echo -r ',
                     os.path.join(pkg_gazebo, 'worlds'),
                     '/',
                     world_arg,
@@ -103,10 +116,23 @@ def generate_launch_description():
             package='ros_gz_bridge',
             executable='parameter_bridge',
             arguments=[
+                # GZ -> ROS only ('[') -- every node launched with
+                # use_sim_time:=true (EKF, slam_toolbox, Nav2, RViz) blocks
+                # waiting for this; without it nothing using sim time ever
+                # actually starts processing.
+                '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
                 '/cmd_vel@geometry_msgs/msg/Twist@gz.msgs.Twist',
                 '/odom@nav_msgs/msg/Odometry@gz.msgs.Odometry',
                 '/scan@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan',
                 '/camera/image_raw@sensor_msgs/msg/Image@gz.msgs.Image',
+                # Wheel joint positions, from the gz-sim-joint-state-publisher-
+                # system plugin on bot.urdf.xacro -- needed for
+                # robot_state_publisher to compute base_link -> *_wheel TF.
+                ['/world/', world_arg, '/model/bot/joint_state',
+                 '@sensor_msgs/msg/JointState[gz.msgs.Model'],
+            ],
+            remappings=[
+                (['/world/', world_arg, '/model/bot/joint_state'], 'joint_states'),
             ],
             output='screen',
         ),

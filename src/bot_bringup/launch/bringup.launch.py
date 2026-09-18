@@ -65,6 +65,11 @@ def generate_launch_description():
             default_value='false',
             description='Launch with Gazebo simulation',
         ),
+        DeclareLaunchArgument(
+            'rviz',
+            default_value='true',
+            description='Launch RViz2 with the Nav2 default view',
+        ),
 
         # Set use_sim_time parameter when using simulation
         SetEnvironmentVariable(
@@ -144,17 +149,22 @@ def generate_launch_description():
             )
         )
 
-    # Robot localization (EKF odometry fusion) - only if package is installed
+    # Robot localization (EKF odometry fusion) - only if package is installed.
+    # robot_localization's own ekf.launch.py ignores 'namespace'/'params_file'
+    # launch arguments entirely -- it hardcodes its package's example params
+    # (odom0: example/odom, no use_sim_time), so we launch the node directly
+    # with our own config instead of including that launch file.
     if robot_loc_available:
         actions.append(
-            IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(
-                    PathJoinSubstitution([pkg_robot_loc, 'launch', 'ekf.launch.py'])
-                ),
-                launch_arguments={
-                    'namespace': '',
-                    'params_file': PathJoinSubstitution([pkg_bringup, 'config', 'ekf_params.yaml']),
-                }.items(),
+            Node(
+                package='robot_localization',
+                executable='ekf_node',
+                name='ekf_filter_node',
+                output='screen',
+                parameters=[
+                    PathJoinSubstitution([pkg_bringup, 'config', 'ekf_params.yaml']),
+                    {'use_sim_time': LaunchConfiguration('use_sim')},
+                ],
             )
         )
 
@@ -179,6 +189,19 @@ def generate_launch_description():
                     'params_file': PathJoinSubstitution([pkg_bringup, 'config', 'nav2_params.yaml']),
                     'autostart': 'true',
                 }.items(),
+            )
+        )
+
+        # RViz2 with Nav2's default view (robot model, TF, costmaps, and the
+        # panel for sending 2D Nav Goals) - only if nav2_bringup is installed
+        actions.append(
+            Node(
+                package='rviz2',
+                executable='rviz2',
+                arguments=['-d', PathJoinSubstitution([pkg_nav2, 'rviz', 'nav2_default_view.rviz'])],
+                parameters=[{'use_sim_time': LaunchConfiguration('use_sim')}],
+                condition=IfCondition(LaunchConfiguration('rviz')),
+                output='screen',
             )
         )
 
