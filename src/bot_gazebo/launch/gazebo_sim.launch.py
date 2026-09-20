@@ -131,6 +131,8 @@ def generate_launch_description():
                 '/odom@nav_msgs/msg/Odometry@gz.msgs.Odometry',
                 '/scan@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan',
                 '/camera/image_raw@sensor_msgs/msg/Image@gz.msgs.Image',
+                # IMU from bot.urdf.xacro's imu_link -- feeds robot_localization's EKF.
+                '/imu@sensor_msgs/msg/Imu[gz.msgs.IMU',
                 # Wheel joint positions, from the gz-sim-joint-state-publisher-
                 # system plugin on bot.urdf.xacro -- needed for
                 # robot_state_publisher to compute base_link -> *_wheel TF.

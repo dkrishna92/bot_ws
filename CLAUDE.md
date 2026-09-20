@@ -34,6 +34,21 @@ Hard constraints from the rules doc:
   early on — don't reintroduce a serial-protocol assumption for this board)
 - Ultrasonic: HC-SR04-class sensors, GPIO trigger/echo (bit-banged; consider
   moving to the safety MCU if timing noise becomes a problem)
+- IMU: Bosch BNO055 — 9-DOF (accel + gyro + magnetometer) with onboard
+  sensor fusion; outputs an absolute, magnetically-referenced orientation
+  directly from the chip, not just raw gyro. Interface (I2C vs UART) and
+  mounting location not yet decided; no real driver node exists yet (open
+  item, see below). Fused into `robot_localization`'s EKF for yaw/yaw-rate
+  only (see `bot_bringup/config/ekf_params.yaml`) — wheel odometry keeps
+  position/linear velocity. Simulated in Gazebo via `bot.urdf.xacro`'s
+  `imu_link` + the `gz-sim-imu-system` world plugin, with noise values
+  approximated from the BNO055 datasheet (verify against the actual
+  datasheet before hardware integration — see that file's comment).
+  Caution: BNO055 magnetometer-based heading (NDOF fusion mode) is
+  commonly reported to degrade near motor current/magnetic fields — this
+  robot's Pololu G2 driver and DC motors are exactly that kind of source,
+  so mounting location matters and on-robot calibration should be
+  verified before trusting its absolute yaw output.
 
 ## Package layout
 
@@ -130,5 +145,51 @@ Laptop-first, Pi 5 for final integration:
 - E-stop MCU firmware not yet written
 - Nav2 params: `robot_radius` now matches `bot.urdf.xacro`'s real footprint
   and the map-then-race launch wiring (mapping.launch.py / bringup.launch.py)
-  is in place, but costmap inflation and controller gains are still
-  untuned against real (non-CAD) course geometry
+  is in place; costmap inflation and controller gains are being addressed
+  via an in-progress planner/controller A/B comparison rather than further
+  hand-tuning DWB in isolation — see "Nav2 planner/controller comparison"
+  below
+- BNO055 real driver node not yet written (I2C vs UART interface and
+  mounting location undecided) — sim uses Gazebo's generic IMU sensor, no
+  real hardware node exists in bot_bringup yet; also verify NDOF
+  magnetometer fusion isn't corrupted by proximity to the motors/Pololu
+  driver once mounted
+
+## Nav2 planner/controller comparison (in progress, not a decided architecture)
+
+The stock config (`nav2_params.yaml` / `nav2_mapping_params.yaml`) runs
+`NavfnPlanner` + `DWBLocalPlanner`, with DWB's critics hand-tuned reactively
+against specific corridor failure modes. Rather than continuing to hand-tune
+DWB in isolation, three alternatives are being empirically A/B tested
+against that baseline — **no decision has been made yet**, this is
+exploratory scaffolding, not a settled choice the way the rest of this file
+describes:
+
+- **`ThetaStarPlanner`** — any-angle A* variant, no turning-radius
+  constraint (architecturally the best fit for a robot with no minimum
+  turning radius), but has no `tolerance` parameter at all — a real risk
+  for `frontier_explore_node`'s frontier-boundary-adjacent goals during
+  mapping specifically.
+- **`SmacPlannerLattice`** — motion-primitive-constrained search using the
+  `diff` motion model (includes in-place-rotation primitives, unlike the
+  already-rejected `SmacPlannerHybrid`/Reeds-Shepp above). Uses the shipped
+  0.5m-turning-radius lattice file; no custom-radius YAML override exists
+  for this plugin (radius comes from the lattice file's own metadata), and
+  generating a custom-radius file would require the upstream
+  lattice-generator tool, not installed on this system.
+- **`MPPIController`** — replaces DWB. This Jazzy install's own
+  `nav2_bringup` reference config defaults to MPPI, not DWB — a strong
+  upstream signal. Main open risk: default `batch_size: 2000` compute cost
+  on the eventual Raspberry Pi 5 (confirmed single-threaded, no
+  OpenMP/TBB) is unbenchmarked on real hardware.
+
+Config file naming: `nav2_params_<variant>.yaml` (race/bringup) and
+`nav2_mapping_params_<variant>.yaml` (mapping), each a full copy of its
+baseline with only one plugin block changed (`planner_server.GridBased` for
+the two planners, `controller_server.FollowPath` for MPPI) — see those
+files' own header comments for the full rationale per variant.
+
+Run the comparison with `scripts/run_nav2_variant_test.sh` (see that
+script's own usage comment), or manually via
+`ros2 launch bot_bringup bringup.launch.py use_sim:=true nav2_params_file:=<variant>.yaml`
+/ the equivalent for `mapping.launch.py`.

@@ -27,20 +27,55 @@ ekf_filter_node:
                     0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                     0.0, 0.0, 0.0]
 
-    # No IMU on this robot (see CLAUDE.md hardware list) -- omit imu0 rather
-    # than leave a disabled, all-false placeholder input.
-
     # Odometry from the diff-drive plugin (sim) / motor_node (real hardware),
-    # bridged to /odom
+    # bridged to /odom. Yaw is deliberately NOT fused from here (index 5,
+    # below) now that imu0 owns orientation -- see imu0 comment below for
+    # why. Position (x,y) and linear velocity (vx,vy) still come from wheel
+    # odometry; it has no drift-prone integration step for those.
     odom0: odom
     odom0_config: [true, true, false,
-                   false, false, true,
+                   false, false, false,
                    true, true, false,
                    false, false, false,
                    false, false, false]
     odom0_queue_size: 10
     odom0_differential: false
     odom0_relative: false
+
+    # IMU: Bosch BNO055 (bot.urdf.xacro's imu_link in sim; real mounting
+    # location/interface TBD, see CLAUDE.md open items). Fuses only yaw and
+    # yaw rate (indices 5, 11), not x/y/z or roll/pitch: this is a
+    # skid-steer robot that can only really trust 2D motion anyway
+    # (two_d_mode above), and wheel-encoder-based heading is the specific
+    # weak point an IMU fixes, since skid-steer turns via wheel scrub, not
+    # clean rolling, which makes wheel-odometry yaw drift badly through
+    # turns. Splitting ownership this way (wheel odom for position/linear
+    # velocity, IMU for orientation) avoids two absolute-yaw sources with
+    # different biases fighting each other in the filter. Not fusing
+    # linear_acceleration: unnecessary noise for a ground robot's 2D EKF
+    # and not worth the vibration filtering it would need.
+    imu0: imu
+    imu0_config: [false, false, false,
+                  false, false, true,
+                  false, false, false,
+                  false, false, true,
+                  false, false, false]
+    imu0_queue_size: 10
+    imu0_differential: false
+    # false: trust the BNO055's own orientation output as an absolute world
+    # reference rather than relative-to-first-value. Unlike a bare
+    # gyro/accel-only IMU, the BNO055 has an onboard magnetometer and runs
+    # its own internal sensor fusion (NDOF mode), producing a
+    # magnetically-referenced absolute heading directly from the chip, not
+    # just integrated gyro drift. Caveat: that magnetometer fusion is
+    # commonly reported to degrade near motor current/magnetic
+    # fields, exactly what this robot's Pololu G2 driver and DC motors
+    # produce, so this assumes reasonable mounting distance and completed
+    # on-robot calibration. If real-world testing shows the heading
+    # jumping/drifting near the motors, switch this back to true (fall
+    # back to gyro-integrated relative heading) rather than trust a
+    # corrupted absolute reference.
+    imu0_relative: false
 
     # Process noise covariance matrix -- diagonal-only form (15 values, one
     # per state dimension); robot_localization also accepts a full 15x15

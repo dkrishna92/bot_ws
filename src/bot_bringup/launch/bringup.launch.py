@@ -70,6 +70,18 @@ def generate_launch_description():
             default_value='true',
             description='Launch RViz2 with the Nav2 default view',
         ),
+        DeclareLaunchArgument(
+            'nav2_params_file',
+            default_value='nav2_params.yaml',
+            description=(
+                'Filename (relative to bot_bringup/config, not a path) of '
+                'the Nav2 params file to load -- swap to A/B test planner/'
+                'controller alternatives without editing this launch file, '
+                'e.g. nav2_params_thetastar.yaml, nav2_params_smac_lattice.yaml, '
+                'nav2_params_mppi.yaml. See CLAUDE.md\'s Nav2 planner/'
+                'controller comparison section.'
+            ),
+        ),
 
         # Set use_sim_time parameter when using simulation
         SetEnvironmentVariable(
@@ -188,7 +200,7 @@ def generate_launch_description():
                     'slam': 'False',
                     'map': PathJoinSubstitution([pkg_bringup, 'config', 'maps', 'map.yaml']),
                     'use_sim_time': LaunchConfiguration('use_sim'),
-                    'params_file': PathJoinSubstitution([pkg_bringup, 'config', 'nav2_params.yaml']),
+                    'params_file': PathJoinSubstitution([pkg_bringup, 'config', LaunchConfiguration('nav2_params_file')]),
                     'autostart': 'true',
                 }.items(),
             )

@@ -19,6 +19,9 @@
   <exec_depend>nav2_bringup</exec_depend>
   <exec_depend>robot_localization</exec_depend>
   <exec_depend>slam_toolbox</exec_depend>
+  <exec_depend>nav2_theta_star_planner</exec_depend>
+  <exec_depend>nav2_smac_planner</exec_depend>
+  <exec_depend>nav2_mppi_controller</exec_depend>
   <exec_depend>bot_explore</exec_depend>
 
   <test_depend>ament_copyright</test_depend>

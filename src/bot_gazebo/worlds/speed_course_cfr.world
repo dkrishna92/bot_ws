@@ -12,7 +12,18 @@
          to produce any output at all -- unlike camera/lidar, they are not
          handled by gz-sim-sensors-system. -->
     <plugin filename="gz-sim-contact-system" name="gz::sim::systems::Contact"/>
-    <!-- cfr:sensors-system -->
+    <!-- Same story as contact sensors: IMU is its own system, not part of
+         gz-sim-sensors-system, even though it's not a rendering sensor
+         either. Required for bot's imu_link sensor (see bot.urdf.xacro) to
+         publish anything. -->
+    <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
+    <!-- This was previously just a stray "cfr:sensors-system" placeholder
+         comment with no actual plugin: camera/lidar (both handled by
+         this system, unlike contact/IMU above) silently produced nothing
+         at all on this world. -->
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
 
     <light type="directional" name="sun">
       <pose>0 0 20 0 0 0</pose>

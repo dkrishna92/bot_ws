@@ -140,6 +140,23 @@ sudo apt install ros-jazzy-nav2-bringup ros-jazzy-robot-localization
 
 Both packages are optional—launch proceeds without them if not installed (useful for laptop development).
 
+### Comparing planner/controller alternatives (development tool)
+
+An in-progress A/B comparison against the current NavFn/DWB config is
+underway — see `CLAUDE.md`'s "Nav2 planner/controller comparison" section
+for what's being compared and why. This is a development tool for tuning,
+not part of the race-day or mapping workflow itself:
+
+```bash
+scripts/run_nav2_variant_test.sh race --all      # race/bringup variants
+scripts/run_nav2_variant_test.sh mapping --all   # mapping/frontier-exploration variants
+```
+
+Or launch a single variant manually with
+`ros2 launch bot_bringup bringup.launch.py use_sim:=true nav2_params_file:=<variant>.yaml`
+(swap `bringup.launch.py` for `mapping.launch.py` and the `nav2_params_`
+prefix for `nav2_mapping_params_` for the mapping-side variants).
+
 ## Status
 
 Full stack is now integrated and ready for tuning, but:

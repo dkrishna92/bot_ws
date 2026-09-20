@@ -12,6 +12,11 @@ log/
 *.bag
 *.db3
 *.pcap
-*.log   
+*.log
 core.*
 *.txt
+
+# Per-run local output from scripts/run_nav2_variant_test.sh -- not
+# something to commit, see CLAUDE.md's Nav2 planner/controller comparison
+# section.
+scripts/nav2_variant_results/

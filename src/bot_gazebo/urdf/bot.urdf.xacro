@@ -138,6 +138,30 @@
     </collision>
   </link>
 
+  <!-- IMU Link -->
+  <link name="imu_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.05"/>
+      <inertia ixx="0.00001" ixy="0" ixz="0" iyy="0.00001" iyz="0" izz="0.00001"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.02 0.02 0.01"/>
+      </geometry>
+      <material name="imu_color">
+        <color rgba="0.9 0.1 0.1 1.0"/>  <!-- Red -->
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.02 0.02 0.01"/>
+      </geometry>
+    </collision>
+  </link>
+
   <!-- Lidar Joint -->
   <joint name="lidar_joint" type="fixed">
     <origin xyz="0 0 ${base_height + 0.06}" rpy="0 0 0"/>
@@ -150,6 +174,16 @@
     <origin xyz="${base_length/2 - 0.05} 0 ${base_height/2 + 0.05}" rpy="0 0 0"/>
     <parent link="base_link"/>
     <child link="camera_link"/>
+  </joint>
+
+  <!-- IMU Joint, mounted flush at the chassis center (no offset needed
+       the way lidar/camera need clearance/forward placement), x-forward
+       z-up matching base_link's own axes so imu_link's orientation
+       readings need no extra rotation to interpret in base_link/odom. -->
+  <joint name="imu_joint" type="fixed">
+    <origin xyz="0 0 ${base_height/2}" rpy="0 0 0"/>
+    <parent link="base_link"/>
+    <child link="imu_link"/>
   </joint>
 
   <!-- Gazebo plugins -->
@@ -172,6 +206,44 @@
         <topic>/bot_contacts</topic>
       </contact>
       <update_rate>30</update_rate>
+    </sensor>
+  </gazebo>
+
+  <!-- IMU sensor (real part: Bosch BNO055) - feeds robot_localization's EKF
+       (see bot_bringup/config/ekf_params.yaml) so heading is tracked from
+       gyro/orientation between SLAM scan-match corrections, not just wheel
+       odometry. Requires the gz-sim-imu-system plugin loaded on the world
+       (see bot_gazebo/worlds/*_cfr.world) - same story as the contact
+       sensor above, it produces no output at all without it.
+
+       Noise stddevs below are approximated from the BNO055 datasheet's
+       noise-density specs (gyro ~0.014 deg/s/sqrt(Hz), accel ~150
+       ug/sqrt(Hz)), converted to a per-sample stddev at this sensor's
+       100Hz update_rate via stddev = density * sqrt(update_rate/2). This
+       is a standard approximation (treats the sensor as white noise
+       band-limited to Nyquist), not a substitute for validating against
+       the actual datasheet or real-hardware calibration once the BNO055
+       is mounted - see CLAUDE.md's open items. gz-sim's IMU sensor has no
+       way to attach noise/covariance to the orientation output itself
+       (only angular_velocity/linear_acceleration below); its
+       orientation_covariance will read back all-zero regardless. -->
+  <gazebo reference="imu_link">
+    <sensor name="imu_sensor" type="imu">
+      <always_on>true</always_on>
+      <update_rate>100</update_rate>
+      <topic>/imu</topic>
+      <imu>
+        <angular_velocity>
+          <x><noise type="gaussian"><mean>0.0</mean><stddev>0.0017</stddev></noise></x>
+          <y><noise type="gaussian"><mean>0.0</mean><stddev>0.0017</stddev></noise></y>
+          <z><noise type="gaussian"><mean>0.0</mean><stddev>0.0017</stddev></noise></z>
+        </angular_velocity>
+        <linear_acceleration>
+          <x><noise type="gaussian"><mean>0.0</mean><stddev>0.0104</stddev></noise></x>
+          <y><noise type="gaussian"><mean>0.0</mean><stddev>0.0104</stddev></noise></y>
+          <z><noise type="gaussian"><mean>0.0</mean><stddev>0.0104</stddev></noise></z>
+        </linear_acceleration>
+      </imu>
     </sensor>
   </gazebo>
 
