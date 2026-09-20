@@ -2,15 +2,15 @@
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="bot">
 
   <!-- Constants -->
-  <xacro:property name="base_length" value="0.61"/>  <!-- 24 inches -->
-  <xacro:property name="base_width" value="0.41"/>   <!-- 16 inches -->
-  <xacro:property name="base_height" value="0.15"/>  <!-- chassis height -->
-  <xacro:property name="wheel_radius" value="0.1"/>  <!-- wheel radius -->
-  <xacro:property name="wheel_width" value="0.08"/>  <!-- wheel width -->
-  <xacro:property name="wheelbase" value="0.50"/>    <!-- distance between wheels -->
-  <xacro:property name="track_width" value="0.35"/>  <!-- width between wheel centers -->
-  <xacro:property name="mass_base" value="11.3"/>    <!-- 25 lbs in kg -->
-  <xacro:property name="mass_wheel" value="0.5"/>
+  <xacro:property name="base_length" value="0.45"/>  <!-- 17.7 inches -->
+  <xacro:property name="base_width" value="0.27"/>   <!-- 10.6inches -->
+  <xacro:property name="base_height" value="0.176"/>  <!-- chassis height -->
+  <xacro:property name="wheel_radius" value="0.12"/>  <!-- wheel radius -->
+  <xacro:property name="wheel_width" value="0.06"/>  <!-- wheel width -->
+  <xacro:property name="wheelbase" value="0.33"/>    <!-- distance between wheels -->
+  <xacro:property name="track_width" value="0.22"/>  <!-- width between wheel centers -->
+  <xacro:property name="mass_base" value="3.2"/>    <!-- 7 lbs  -->
+  <xacro:property name="mass_wheel" value="0.2"/>
 
   <!-- Base Link (Chassis) -->
   <link name="base_link">

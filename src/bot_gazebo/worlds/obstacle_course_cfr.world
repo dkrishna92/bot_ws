@@ -443,7 +443,12 @@
       <collision name="outer_rail_23_collision"><pose>6.5552 1.3762 0.0894 0.0000 0.1117 10.8974</pose><geometry><box><size>0.3522 0.0500 0.1524</size></box></geometry></collision>
       <visual name="outer_rail_23_visual"><pose>6.5552 1.3762 0.0894 0.0000 0.1117 10.8974</pose><geometry><box><size>0.3522 0.0500 0.1524</size></box></geometry><material><diffuse>0.62 0.48 0.31 1</diffuse></material></visual>
     </link></model>
-    <!-- Car wash: ribbons are visual only, they cannot deflect the car. -->
+    <!-- Car wash: ribbons are visual only, they cannot deflect the car.
+         Temporarily disabled (commented out) -- its base_collision floor
+         mat spans nearly the full corridor width and was suspected of
+         blocking/confusing frontier exploration during mapping; testing
+         with it removed to isolate the effect. -->
+    <!--
     <model name="car_wash"><static>true</static><link name="link">
       <visual name="base_visual"><pose>-2.8703 -0.0002 0.0000 0.0000 0.0000 0.0000</pose><geometry><mesh><uri>model://cfr_arduino_bridge/meshes/car_wash_base.stl</uri></mesh></geometry><material><diffuse>0.88 0.88 0.90 1</diffuse></material></visual>
       <collision name="base_collision"><pose>-2.8703 -0.0002 0.0065 0.0000 0.0000 0.0000</pose><geometry><box><size>2.4384 1.2192 0.0130</size></box></geometry></collision>
@@ -503,6 +508,7 @@
       <visual name="strip_4_6_visual"><pose>-1.9910 0.3173 0.3275 0.0000 0.0000 0.0000</pose><geometry><box><size>0.0370 0.0510 0.4250</size></box></geometry><material><diffuse>0.20 0.45 0.85 1</diffuse></material></visual>
       <visual name="strip_4_7_visual"><pose>-1.9910 0.4443 0.3275 0.0000 0.0000 0.0000</pose><geometry><box><size>0.0370 0.0510 0.4250</size></box></geometry><material><diffuse>0.90 0.25 0.20 1</diffuse></material></visual>
     </link></model>
+    -->
     <!-- Gravel: low friction lid and loose pebbles stand in for pea gravel. -->
     <model name="gravel_box"><static>true</static><link name="link">
       <visual name="box_visual"><pose>2.3220 -9.9089 0.0000 0.0000 0.0000 0.0000</pose><geometry><mesh><uri>model://cfr_arduino_bridge/meshes/gravel_box.stl</uri></mesh></geometry><material><diffuse>0.62 0.48 0.31 1</diffuse></material></visual>

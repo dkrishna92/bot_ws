@@ -47,8 +47,15 @@ ros2 launch bot_bringup bringup.launch.py
 ```
 
 ### Gazebo Simulation (Laptop/Development)
+
 ```bash
 ros2 launch bot_bringup bringup.launch.py use_sim:=true
+```
+
+For mapping Run
+
+```bash
+ros2 launch bot_bringup mapping.launch.py use_sim:=true
 ```
 
 This launches the full stack with Gazebo simulation:

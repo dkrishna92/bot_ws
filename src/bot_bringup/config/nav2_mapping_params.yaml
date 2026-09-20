@@ -1,3 +1,15 @@
+# Variant of nav2_params.yaml used only by mapping.launch.py (via
+# navigation_launch.py -- amcl/map_server below are unused there and
+# harmless). The one deliberate difference is global_costmap.plugins,
+# documented at that section below; nav2_common's RewrittenYaml can't
+# safely override a list-valued parameter like a plugin list (its
+# converter only handles scalars -- a string substitution there would
+# silently corrupt the parameter's type, the same class of bug as the
+# 1e-10-parses-as-a-string issue elsewhere in this file), so a small
+# dedicated copy is the safer route rather than a shared file with a
+# broken override. Keep changes to bringup.launch.py's race-day behavior
+# (this file's amcl/costmap/planner tuning) in nav2_params.yaml, and only
+# port them here if they apply to mapping too.
 amcl:
   ros__parameters:
     use_sim_time: True
@@ -167,20 +179,29 @@ local_costmap:
       # 0.26 is the true circumscribed-circle radius of the actual
       # measured chassis (17.7 x 10.6in / 0.45 x 0.27m,
       # sqrt((0.45/2)^2+(0.27/2)^2)), matching bot.urdf.xacro's real
-      # base_link collision box and mass (7lb, well under the 25lb rule
-      # cap). Do NOT shrink this below whatever bot.urdf.xacro's real
-      # footprint currently is -- doing so let Nav2 plan through gaps the
-      # simulated robot's actual collision geometry can't fit through,
-      # causing real Gazebo collisions (chassis clipping bales) that
-      # looked like a DWB tuning problem ("drives forward then gets
-      # pushed back") but were actually physics. Keep this in sync if
+      # base_link collision box. Do NOT shrink this below whatever
+      # bot.urdf.xacro's real footprint currently is -- doing so let Nav2
+      # plan through gaps the simulated robot's actual collision geometry
+      # can't fit through, causing real Gazebo collisions (chassis
+      # clipping bales) that looked like a DWB tuning problem ("drives
+      # forward then gets pushed back") but were actually physics. Keep
+      # this in sync with nav2_params.yaml's copy of this same comment if
       # base_width/base_length change again.
       robot_radius: 0.26
       plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.55
+        # 0.35, not 0.55 (nav2_params.yaml's race-day value) -- mapping-only
+        # override. The corridor here is ~1.3m wide against a 0.37m
+        # robot_radius; 0.55 inflation left most of the centerline at cost
+        # 60-90/100 (confirmed by dumping the live costmap), which doesn't
+        # change the hard inscribed-lethal band (that's fixed at
+        # robot_radius regardless of this value -- do not expect this
+        # alone to fix a start pose already inside it) but does reduce the
+        # cost pressure that pushes planned/driven paths off centerline in
+        # the first place.
+        inflation_radius: 0.35
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
@@ -207,25 +228,43 @@ global_costmap:
       # See local_costmap's robot_radius comment above -- same caveat applies.
       robot_radius: 0.26
       resolution: 0.05
-      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      # rolling_window: true, with a generous fixed size below -- during
+      # mapping the map this costmap tracks (slam_toolbox's /map) keeps
+      # growing and re-origining as new area is explored. Nav2's
+      # LayeredCostmap only resizes a *non-rolling* costmap's master grid
+      # once, off the first map it ever receives; a later map of different
+      # size/origin isn't used to resize it again, so the static_layer's
+      # output silently goes stale -- confirmed live: after exploring for
+      # a while, /global_costmap/costmap's origin and dimensions were
+      # frozen at their very-first-map values (checked repeatedly, several
+      # seconds apart, unchanged) while the actual slam_toolbox /map had
+      # long since grown far past them, and the planner was refusing to
+      # plan ("Failed to create plan with tolerance of: 0.25") to points
+      # the raw, current /map clearly showed as free. A rolling window
+      # sidesteps this: it's always freshly centered/sized around the
+      # robot's current position, the same reason local_costmap's
+      # rolling_window above is immune to this class of bug. 20x20m is
+      # comfortably larger than any single frontier hop this course
+      # produces. No obstacle_layer here (unlike nav2_params.yaml's
+      # race-day version) -- the static_layer (fed directly from
+      # slam_toolbox's already-sensor-derived /map) is sufficient for
+      # global planning during exploration; the local costmap's own
+      # obstacle_layer still provides real-time obstacle avoidance while
+      # driving.
+      plugins: ["static_layer", "inflation_layer"]
+      rolling_window: true
+      width: 20
+      height: 20
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         enabled: true
         map_subscribe_transient_local: true
-      obstacle_layer:
-        plugin: "nav2_costmap_2d::ObstacleLayer"
-        enabled: true
-        observation_sources: scan
-        scan:
-          topic: /scan
-          max_obstacle_height: 2.0
-          clearing: true
-          marking: true
-          data_type: "LaserScan"
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.55
+        # See local_costmap's inflation_radius comment above -- same
+        # mapping-only rationale applies here.
+        inflation_radius: 0.35
 
 planner_server:
   ros__parameters:

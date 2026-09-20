@@ -46,12 +46,25 @@ class FrontierExploreNode(Node):
         # otherwise the picker keeps choosing spots immediately next to the
         # robot, which only need an in-place rotation instead of real travel.
         self.declare_parameter("min_goal_distance_m", 0.5)
+        # How strongly to penalize a frontier for requiring a sharp turn
+        # from the robot's current heading, relative to picking purely by
+        # distance. 0 disables the bias entirely (pure nearest-frontier,
+        # the old behavior); 1.5 means a frontier directly behind the
+        # robot (180 deg turn) is scored as if 2.5x farther away than an
+        # equally-distant one straight ahead. Without this, the picker
+        # ping-pongs between whichever frontier is nearest regardless of
+        # direction, forcing frequent large in-place turns -- on a
+        # skid-steer drivetrain those turn via wheel scrub rather than
+        # rolling cleanly, which is exactly where the robot tends to drift
+        # sideways off the corridor centerline between turns.
+        self.declare_parameter("heading_turn_penalty", 1.5)
         self.declare_parameter("map_topic", "map")
         self.declare_parameter("save_map_name", "src/bot_bringup/config/maps/map")
         self.declare_parameter("planning_period_s", 2.0)
 
         self._min_frontier_size = self.get_parameter("min_frontier_size").value
         self._blacklist_radius = self.get_parameter("goal_blacklist_radius_m").value
+        self._heading_turn_penalty = self.get_parameter("heading_turn_penalty").value
         self._min_goal_distance = self.get_parameter("min_goal_distance_m").value
         self._save_map_name = self.get_parameter("save_map_name").value
 
@@ -100,12 +113,15 @@ class FrontierExploreNode(Node):
     def _on_map(self, msg: OccupancyGrid) -> None:
         self._map = msg
 
-    def _robot_pose(self) -> tuple[float, float] | None:
+    def _robot_pose(self) -> tuple[float, float, float] | None:
+        """Returns (x, y, yaw) in the map frame; yaw feeds the heading bias in _pick_goal."""
         try:
             t = self._tf_buffer.lookup_transform("map", "base_link", Time())
         except (LookupException, ConnectivityException, ExtrapolationException):
             return None
-        return t.transform.translation.x, t.transform.translation.y
+        q = t.transform.rotation
+        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        return t.transform.translation.x, t.transform.translation.y, yaw
 
     def _find_frontiers(self) -> list[tuple[float, float, int]]:
         """Cluster frontier cells; return (world_x, world_y, cluster_size) per cluster."""
@@ -150,14 +166,17 @@ class FrontierExploreNode(Node):
             clusters.append((ox + (cx + 0.5) * res, oy + (cy + 0.5) * res, len(component)))
         return clusters
 
-    def _pick_goal(self, pose: tuple[float, float]) -> tuple[float, float] | None:
-        px, py = pose
+    def _pick_goal(self, pose: tuple[float, float, float]) -> tuple[float, float] | None:
+        px, py, yaw = pose
         candidates = []
         for wx, wy, _size in self._find_frontiers():
             if any(math.hypot(wx - bx, wy - by) < self._blacklist_radius
                    for bx, by in self._blacklist):
                 continue
-            candidates.append((math.hypot(wx - px, wy - py), (wx, wy)))
+            dist = math.hypot(wx - px, wy - py)
+            bearing = math.atan2(wy - py, wx - px)
+            heading_error = abs(math.atan2(math.sin(bearing - yaw), math.cos(bearing - yaw)))
+            candidates.append((dist, heading_error, (wx, wy)))
         if not candidates:
             return None
 
@@ -165,7 +184,17 @@ class FrontierExploreNode(Node):
         # travel; only fall back to a closer one if nothing farther exists.
         far_enough = [c for c in candidates if c[0] >= self._min_goal_distance]
         pool = far_enough if far_enough else candidates
-        return min(pool, key=lambda c: c[0])[1]
+
+        # Inflate each candidate's effective distance by how far off the
+        # current heading it is (see heading_turn_penalty's declaration
+        # above) so exploration keeps going mostly straight instead of
+        # ping-ponging to whichever frontier is nearest regardless of
+        # direction.
+        def score(c: tuple[float, float, tuple[float, float]]) -> float:
+            dist, heading_error, _ = c
+            return dist * (1.0 + self._heading_turn_penalty * (heading_error / math.pi))
+
+        return min(pool, key=score)[2]
 
     def _save_map(self) -> None:
         if not self._save_map_client.wait_for_service(timeout_sec=5.0):

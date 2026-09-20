@@ -84,6 +84,21 @@ def generate_launch_description():
         # base_frame ("base_footprint") this robot doesn't have -- without
         # this override slam_toolbox spins forever on "Failed to compute
         # odom pose" and never publishes /map.
+        #
+        # use_lifecycle_manager: true here disables online_async_launch.py's
+        # own built-in auto-configure/activate (a one-shot EmitEvent fired
+        # at launch-graph-build time, with no wait/retry for the node's
+        # lifecycle service to exist yet). That race loses outright whenever
+        # slam_toolbox is slow to come up -- which stack_size_to_use above
+        # makes it, since reallocating a 40MB stack for large-map
+        # serialization delays when its lifecycle interface is ready. Lost
+        # race means slam_toolbox sits in "unconfigured" forever: never
+        # subscribes to /scan, never publishes /map, and every downstream
+        # consumer (global costmap's static_layer, frontier_explore_node)
+        # waits on a map that will never come -- "mapping doesn't map".
+        # The lifecycle_manager below owns activation instead, the same
+        # proven-reliable retrying pattern nav2_bringup itself uses for
+        # amcl/map_server/controller_server in bringup.launch.py.
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 PathJoinSubstitution([pkg_slam_toolbox, 'launch', 'online_async_launch.py'])
@@ -91,13 +106,29 @@ def generate_launch_description():
             launch_arguments={
                 'use_sim_time': LaunchConfiguration('use_sim'),
                 'slam_params_file': PathJoinSubstitution([pkg_bringup, 'config', 'slam_toolbox_params.yaml']),
+                'use_lifecycle_manager': 'true',
             }.items(),
+        ),
+        Node(
+            package='nav2_lifecycle_manager',
+            executable='lifecycle_manager',
+            name='lifecycle_manager_slam',
+            output='screen',
+            parameters=[{
+                'use_sim_time': LaunchConfiguration('use_sim'),
+                'autostart': True,
+                'node_names': ['slam_toolbox'],
+            }],
         ),
 
         # Nav2 navigation servers (controller/planner/bt_navigator) so the
         # frontier explorer below has something to send goals to. Localizes
         # against slam_toolbox's live /map, not amcl -- see bringup.launch.py
         # for the pre-built-map (amcl + map_server) race-day equivalent.
+        #
+        # nav2_mapping_params.yaml, not nav2_params.yaml -- see that file's
+        # global_costmap comment for why mapping needs its own copy rather
+        # than sharing the race-day params file.
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 PathJoinSubstitution([pkg_nav2, 'launch', 'navigation_launch.py'])
@@ -105,7 +136,7 @@ def generate_launch_description():
             launch_arguments={
                 'namespace': '',
                 'use_sim_time': LaunchConfiguration('use_sim'),
-                'params_file': PathJoinSubstitution([pkg_bringup, 'config', 'nav2_params.yaml']),
+                'params_file': PathJoinSubstitution([pkg_bringup, 'config', 'nav2_mapping_params.yaml']),
                 'autostart': 'true',
             }.items(),
         ),
