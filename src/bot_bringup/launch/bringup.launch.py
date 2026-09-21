@@ -23,7 +23,8 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetE
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, NotEqualsSubstitution
 from launch.conditions import IfCondition
-from launch_ros.actions import Node
+from launch_ros.actions import Node, LoadComposableNodes
+from launch_ros.descriptions import ComposableNode
 
 
 def generate_launch_description():
@@ -150,16 +151,58 @@ def generate_launch_description():
             )
         )
 
-    # OAK-D S2 driver - only if package is installed and not in sim mode
+    # OAK-D S2 driver - only if package is installed and not in sim mode.
+    # 'oak_d_lite_launch.py' (the previous filename here) doesn't exist in
+    # depthai_ros_driver -- 'camera.launch.py' is the real generic launch
+    # file (see /opt/ros/jazzy/share/depthai_ros_driver/launch/). It also
+    # never had params_file wired to this package's own oak_params.yaml
+    # before, so that config was dead.
+    oak_condition = IfCondition(NotEqualsSubstitution(
+        LaunchConfiguration('use_sim'), 'true'
+    ))
     if oak_available:
         actions.append(
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
-                    PathJoinSubstitution([pkg_oak, 'launch', 'oak_d_lite_launch.py'])
+                    PathJoinSubstitution([pkg_oak, 'launch', 'camera.launch.py'])
                 ),
-                condition=IfCondition(NotEqualsSubstitution(
-                    LaunchConfiguration('use_sim'), 'true'
-                )),
+                condition=oak_condition,
+                launch_arguments={
+                    'name': 'oak',
+                    'camera_model': 'OAK-D-S2',
+                    'params_file': PathJoinSubstitution([pkg_bringup, 'config', 'oak_params.yaml']),
+                    # Skip the RGB rectify pipeline -- not needed for the
+                    # depth-only point cloud below, and CLAUDE.md's hardware
+                    # notes call for the host to receive depth (and, later,
+                    # on-device detections), never raw/rectified RGB frames.
+                    'rectify_rgb': 'false',
+                }.items(),
+            )
+        )
+
+        # Depth -> point cloud for the local costmap's voxel_layer (see
+        # nav2_params.yaml). depthai_ros_driver's own built-in point cloud
+        # path (the 'pointcloud.enable' launch arg above) only produces a
+        # colorized cloud via PointCloudXyzrgbNode, which requires the RGB
+        # stream -- exactly the raw-frame path CLAUDE.md says to avoid. Using
+        # depth_image_proc's XYZ-only node against the depth image directly
+        # avoids pulling RGB into this at all. Loads into the same component
+        # container camera.launch.py just created ('<name>_container').
+        actions.append(
+            LoadComposableNodes(
+                target_container='/oak_container',
+                condition=oak_condition,
+                composable_node_descriptions=[
+                    ComposableNode(
+                        package='depth_image_proc',
+                        plugin='depth_image_proc::PointCloudXyzNode',
+                        name='oak_points_node',
+                        remappings=[
+                            ('image_rect', 'oak/stereo/image_raw'),
+                            ('points', 'oak/points'),
+                        ],
+                    ),
+                ],
             )
         )
 
@@ -206,13 +249,15 @@ def generate_launch_description():
             )
         )
 
-        # RViz2 with Nav2's default view (robot model, TF, costmaps, and the
-        # panel for sending 2D Nav Goals) - only if nav2_bringup is installed
+        # RViz2 with this package's own view (robot model, TF, costmaps, the
+        # panel for sending 2D Nav Goals, a ThirdPersonFollower camera that
+        # actually tracks base_link, and the OAK-D depth point cloud) rather
+        # than nav2_bringup's stock nav2_default_view.rviz.
         actions.append(
             Node(
                 package='rviz2',
                 executable='rviz2',
-                arguments=['-d', PathJoinSubstitution([pkg_nav2, 'rviz', 'nav2_default_view.rviz'])],
+                arguments=['-d', PathJoinSubstitution([pkg_bringup, 'launch', 'thirdpersonviewer.rviz'])],
                 parameters=[{'use_sim_time': LaunchConfiguration('use_sim')}],
                 condition=IfCondition(LaunchConfiguration('rviz')),
                 output='screen',

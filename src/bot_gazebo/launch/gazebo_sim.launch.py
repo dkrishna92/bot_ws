@@ -133,6 +133,12 @@ def generate_launch_description():
                 '/camera/image_raw@sensor_msgs/msg/Image@gz.msgs.Image',
                 # IMU from bot.urdf.xacro's imu_link -- feeds robot_localization's EKF.
                 '/imu@sensor_msgs/msg/Imu[gz.msgs.IMU',
+                # OAK-D depth, simulated via bot.urdf.xacro's oak_depth_sensor
+                # (gz-sim depth_camera) -- only the auto-generated point cloud
+                # is bridged (remapped to /oak/points below), not the raw
+                # depth image itself, since nothing in sim subscribes to that.
+                # Feeds local_costmap's voxel_layer in nav2_params.yaml.
+                '/oak/depth/points@sensor_msgs/msg/PointCloud2[gz.msgs.PointCloudPacked',
                 # Wheel joint positions, from the gz-sim-joint-state-publisher-
                 # system plugin on bot.urdf.xacro -- needed for
                 # robot_state_publisher to compute base_link -> *_wheel TF.
@@ -146,6 +152,7 @@ def generate_launch_description():
             ],
             remappings=[
                 (['/world/', world_arg, '/model/bot/joint_state'], 'joint_states'),
+                ('/oak/depth/points', '/oak/points'),
             ],
             output='screen',
         ),
