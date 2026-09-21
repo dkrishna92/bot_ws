@@ -20,3 +20,7 @@ core.*
 # something to commit, see CLAUDE.md's Nav2 planner/controller comparison
 # section.
 scripts/nav2_variant_results/
+
+# Per-run local output from scripts/measure_exploration_progress.py --
+# same rationale as nav2_variant_results/ above.
+scripts/exploration_results/

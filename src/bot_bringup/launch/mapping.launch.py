@@ -52,6 +52,20 @@ def generate_launch_description():
             description='Launch RViz2 with the Nav2 default view',
         ),
         DeclareLaunchArgument(
+            'headless',
+            default_value='false',
+            description='Run Gazebo headless (forwarded to gazebo_sim.launch.py)',
+        ),
+        DeclareLaunchArgument(
+            'world',
+            default_value='obstacle_course_cfr',
+            description=(
+                'World to load (forwarded to gazebo_sim.launch.py): '
+                'obstacle_course_cfr, speed_course_cfr, obstacle_course, '
+                'speed_course, or onshape_course'
+            ),
+        ),
+        DeclareLaunchArgument(
             'nav2_params_file',
             default_value='nav2_mapping_params.yaml',
             description=(
@@ -72,7 +86,11 @@ def generate_launch_description():
                 PathJoinSubstitution([pkg_gazebo, 'launch', 'gazebo_sim.launch.py'])
             ),
             condition=IfCondition(LaunchConfiguration('use_sim')),
-            launch_arguments={'publish_static_map_odom': 'false'}.items(),
+            launch_arguments={
+                'publish_static_map_odom': 'false',
+                'headless': LaunchConfiguration('headless'),
+                'world': LaunchConfiguration('world'),
+            }.items(),
         ),
 
         # Odometry fusion -- slam_toolbox's scan matching is more accurate
@@ -166,12 +184,14 @@ def generate_launch_description():
             }],
         ),
 
-        # RViz2 with Nav2's default view -- handy to watch the map fill in
-        # live as frontier_explore_node drives
+        # RViz2 with this package's own view -- handy to watch the map fill
+        # in live as frontier_explore_node drives, with a ThirdPersonFollower
+        # camera that actually tracks base_link and the OAK-D depth point
+        # cloud, instead of nav2_bringup's stock nav2_default_view.rviz.
         Node(
             package='rviz2',
             executable='rviz2',
-            arguments=['-d', PathJoinSubstitution([pkg_nav2, 'rviz', 'nav2_default_view.rviz'])],
+            arguments=['-d', PathJoinSubstitution([pkg_bringup, 'launch', 'thirdpersonviewer.rviz'])],
             parameters=[{'use_sim_time': LaunchConfiguration('use_sim')}],
             condition=IfCondition(LaunchConfiguration('rviz')),
             output='screen',
