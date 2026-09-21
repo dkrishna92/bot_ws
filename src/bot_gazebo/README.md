@@ -58,7 +58,7 @@ currently **not wired up** — passing `headless:=true` has no effect on the
 ### Sensors (Simulated)
 1. **Lidar (stand-in for RPLIDAR)**: `gpu_lidar` sensor, 360 samples, range 0.3–12m, resolution 0.01m, topic `/scan`
 2. **Camera (stand-in for OAK-D S2)**: `camera` sensor, RGB 640×480@30Hz, 60° horizontal FoV, topic `/camera/image_raw` only — `/camera/camera_info` is **not** currently bridged, so anything expecting `sensor_msgs/CameraInfo` on the ROS side won't get it yet
-3. **Ultrasonic**: **not simulated at all** right now — `bot_ultrasonic`'s `ultrasonic_node` only does anything against real GPIO hardware on the Pi; there's no gz-sim equivalent sensor or mock
+3. **Ultrasonic**: **not simulated at all** right now — `bot_odometry`'s wheel_odom_node only publishes ultrasonic ranges when parsing real Teensy serial data; there's no gz-sim equivalent sensor or mock
 
 ### World
 Multiple course worlds are available (`obstacle_course_cfr`, `speed_course_cfr`, plus legacy/test worlds) — see `GAZEBO_WORLDS.md` at the workspace root for the full list, launch commands, and directory layout. Don't duplicate course-geometry details here; that file is the source of truth.
@@ -122,7 +122,7 @@ Edit the relevant world file (e.g. `worlds/obstacle_course_cfr.world`) to adjust
 
 1. **No true depth sensor**: camera publishes RGB only, no depth map. For stereo depth, add a `depth_camera` sensor type to `bot.urdf.xacro`'s `<gazebo reference="camera_link">` block — gz-sim's Sensors system handles it natively, no extra plugin filename needed (unlike classic Gazebo).
 2. **`/camera/camera_info` not bridged**: add it to the `ros_gz_bridge` arguments in `gazebo_sim.launch.py` if you need calibration info on the ROS side.
-3. **No ultrasonic simulation**: real hardware only, via `bot_ultrasonic`.
+3. **No ultrasonic simulation**: real hardware only, via `bot_odometry`'s wheel_odom_node (Teensy serial link, shared with encoder reporting).
 4. **`odom → base_link` TF depends on which launch file you use** (only present when the EKF is running, i.e. `bringup.launch.py`/`mapping.launch.py`, not bare `gazebo_sim.launch.py`).
 5. **`base_link → *_wheel` TF doesn't populate**: `gz-sim-joint-state-publisher-system` loads (confirmed in the Gazebo console) but never actually registers as a publisher on its own `/world/.../model/bot/joint_state` topic (confirmed with `gz topic -i`), even with the robot actively driving. Doesn't block driving/navigation -- `gz-sim-diff-drive-system` commands the wheel joints directly and does not depend on this. Looks like a gz-sim limitation specific to models spawned dynamically via `ros_gz_sim create` rather than declared statically in the world file; not yet root-caused.
 6. **`headless:=true` is a no-op** (see Quick Start above).

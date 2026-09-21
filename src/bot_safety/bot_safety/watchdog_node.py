@@ -1,12 +1,21 @@
 """Software watchdog -- defense in depth, NOT the primary safety mechanism.
 
-Same role as the earlier bare-Python prototype: the MCU is the actual <1s
-real-time e-stop, isolated from this ROS 2 stack. This node just (a) mirrors
-MCU e-stop status onto the ROS 2 graph via /system_fault so other nodes can
-react, and (b) catches stack-level failures (a node dying) that the MCU
-wouldn't know about on its own, by watching topic activity as a liveness
-proxy instead of a dedicated heartbeat topic (simpler in ROS 2 since we get
-topic statistics for free -- no need to hand-roll a heartbeat message type).
+E-stop is a separate Arduino Nano wired directly to the motor driver's
+enable/disable line -- a hardware cutoff, independent of this ROS 2 stack
+entirely (see CLAUDE.md's Safety architecture). This node's role: catch
+stack-level failures (a node dying) that the Nano wouldn't know about on
+its own, by watching topic activity as a liveness proxy instead of a
+dedicated heartbeat topic (simpler in ROS 2 since we get topic statistics
+for free -- no need to hand-roll a heartbeat message type), and publish
+/system_fault so other nodes can react.
+
+The MCU-serial-mirror code below is commented out: it assumed e-stop status
+was readable over serial from a Teensy, which isn't how the real hardware
+works -- the Nano's cutoff is a direct hardware disconnect, not something
+this stack observes over serial, and the Teensy is now dedicated to wheel
+encoder reporting instead (see bot_odometry). Left in place, commented, in
+case a future serial status line from the Nano (or another MCU) makes sense
+to mirror the same way.
 """
 from __future__ import annotations
 
@@ -20,10 +29,10 @@ try:
 except ImportError:
     GPIO = None
 
-try:
-    import serial
-except ImportError:
-    serial = None
+# try:
+#     import serial
+# except ImportError:
+#     serial = None
 
 
 class WatchdogNode(Node):
@@ -31,8 +40,8 @@ class WatchdogNode(Node):
         super().__init__("watchdog_node")
 
         self.declare_parameter("fault_gpio_pin", 26)
-        self.declare_parameter("mcu_serial_port", "/dev/ttyACM1")
-        self.declare_parameter("mcu_baudrate", 115200)
+        # self.declare_parameter("mcu_serial_port", "/dev/ttyACM1")
+        # self.declare_parameter("mcu_baudrate", 115200)
         self.declare_parameter("scan_timeout_s", 1.0)
 
         self._fault_pin = self.get_parameter("fault_gpio_pin").value
@@ -49,16 +58,16 @@ class WatchdogNode(Node):
 
         self._mcu_serial = None
         self._mcu_estop_active = False
-        if serial is not None:
-            try:
-                self._mcu_serial = serial.Serial(
-                    self.get_parameter("mcu_serial_port").value,
-                    self.get_parameter("mcu_baudrate").value,
-                    timeout=0.05,
-                )
-            except serial.SerialException:
-                self.get_logger().warn("could not open MCU status serial port -- "
-                                        "continuing without MCU status mirroring")
+        # if serial is not None:
+        #     try:
+        #         self._mcu_serial = serial.Serial(
+        #             self.get_parameter("mcu_serial_port").value,
+        #             self.get_parameter("mcu_baudrate").value,
+        #             timeout=0.05,
+        #         )
+        #     except serial.SerialException:
+        #         self.get_logger().warn("could not open MCU status serial port -- "
+        #                                 "continuing without MCU status mirroring")
 
         self.create_timer(0.05, self._tick)  # 20 Hz
 
@@ -66,17 +75,20 @@ class WatchdogNode(Node):
         self._last_scan_time = self.get_clock().now()
 
     def _check_mcu_status(self) -> bool:
-        if self._mcu_serial is None:
-            return False
-        try:
-            line = self._mcu_serial.readline().decode(errors="ignore").strip()
-            if line == "ESTOP":
-                self._mcu_estop_active = True
-            elif line == "OK":
-                self._mcu_estop_active = False
-        except serial.SerialException:
-            self.get_logger().error("lost MCU serial connection")
+        # MCU serial mirror disabled -- see module docstring. Always
+        # "no fault from this source" until re-enabled against real hardware.
         return self._mcu_estop_active
+        # if self._mcu_serial is None:
+        #     return False
+        # try:
+        #     line = self._mcu_serial.readline().decode(errors="ignore").strip()
+        #     if line == "ESTOP":
+        #         self._mcu_estop_active = True
+        #     elif line == "OK":
+        #         self._mcu_estop_active = False
+        # except serial.SerialException:
+        #     self.get_logger().error("lost MCU serial connection")
+        # return self._mcu_estop_active
 
     def _tick(self) -> None:
         # Fail-safe default: no scan ever received counts as stale, not fine --
@@ -101,8 +113,8 @@ class WatchdogNode(Node):
         if GPIO is not None:
             GPIO.output(self._fault_pin, True)  # fail safe: assert fault on exit
             GPIO.cleanup()
-        if self._mcu_serial is not None:
-            self._mcu_serial.close()
+        # if self._mcu_serial is not None:
+        #     self._mcu_serial.close()
         super().destroy_node()
 
 

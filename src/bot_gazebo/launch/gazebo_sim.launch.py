@@ -149,6 +149,12 @@ def generate_launch_description():
                 # `ros2 topic echo /bot_contacts` instead of inferred from
                 # TF/cmd_vel mismatches.
                 '/bot_contacts@ros_gz_interfaces/msg/Contacts[gz.msgs.Contacts',
+                # Ground-truth model pose (bot.urdf.xacro's PosePublisher
+                # plugin) -- sim-only diagnostic, NOT part of the real robot;
+                # used by scripts/compare_odom_to_ground_truth.py to check
+                # DiffDrive's kinematic /odom against physics ground truth
+                # (see that plugin's comment in bot.urdf.xacro).
+                '/model/bot/pose@geometry_msgs/msg/Pose[gz.msgs.Pose',
             ],
             remappings=[
                 (['/world/', world_arg, '/model/bot/joint_state'], 'joint_states'),

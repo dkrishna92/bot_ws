@@ -1,17 +1,16 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>bot_ultrasonic</name>
+  <name>bot_odometry</name>
   <version>0.1.0</version>
-  <description>Ultrasonic sensor array node (HC-SR04-class, bit-banged GPIO). Publishes sensor_msgs/Range per sensor for Nav2's range_sensor_layer costmap plugin.</description>
+  <description>Wheel odometry + ultrasonic node: converts Teensy-reported quadrature encoder ticks into nav_msgs/Odometry for robot_localization's EKF, and Teensy-reported ultrasonic echo pulses into sensor_msgs/Range. Real hardware only -- Gazebo sim gets equivalent odometry for free from bot_gazebo's DiffDrive plugin (see CLAUDE.md).</description>
   <maintainer email="krishna.dontaraju@gmail.com">Krishna</maintainer>
   <license>Apache-2.0</license>
 
   <exec_depend>rclpy</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
-  <!-- RPi.GPIO has no standard rosdep key: apt install python3-rpi.gpio
-       on the Pi. Not required on dev machines; ultrasonic_node runs in
-       dry-run mode without it. -->
+  <exec_depend>python3-serial</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

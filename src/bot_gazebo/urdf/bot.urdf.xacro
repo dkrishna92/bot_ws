@@ -274,6 +274,31 @@
          are non-fixed (continuous) but nothing reports their position, so
          robot_state_publisher has nothing to publish their transform from. -->
     <plugin filename="gz-sim-joint-state-publisher-system" name="gz::sim::systems::JointStatePublisher"/>
+
+    <!-- Ground-truth pose publisher, sim-only diagnostic, NOT part of the
+         real robot's sensor suite. DiffDrive's /odom above is kinematic
+         (integrated from wheel joint angle, zero-slip assumed), not physics
+         ground truth: if the chassis is wedged/colliding while the wheels
+         still spin, /odom over-reports displacement and slam_toolbox gets
+         fed a wrong believed pose. This publishes the model's actual
+         world-frame pose so scripts/compare_odom_to_ground_truth.py can
+         catch exactly that divergence, see the frontier exploration
+         investigation notes in CLAUDE.md. use_pose_vector_msg left at its
+         default (false); with one model and publish_model_pose the only
+         thing enabled, this publishes plain gz.msgs.Pose on
+         /model/bot/pose per the plugin's default topic-naming convention
+         (confirmed against /opt/.../gz-sim8/worlds/pose_publisher.sdf),
+         double check via `gz topic -l | grep bot` after first launch,
+         same as the contact sensor topic above. -->
+    <plugin filename="gz-sim-pose-publisher-system" name="gz::sim::systems::PosePublisher">
+      <publish_model_pose>true</publish_model_pose>
+      <publish_link_pose>false</publish_link_pose>
+      <publish_collision_pose>false</publish_collision_pose>
+      <publish_visual_pose>false</publish_visual_pose>
+      <publish_nested_model_pose>false</publish_nested_model_pose>
+      <static_publisher>false</static_publisher>
+      <update_frequency>30</update_frequency>
+    </plugin>
   </gazebo>
 
   <!-- Lidar Sensor (simulates RPLIDAR) - gz-sim gpu_lidar -->
@@ -303,6 +328,22 @@
           <max>12</max>
           <resolution>0.01</resolution>
         </range>
+        <!-- Excludes visuals tagged visibility_flags=1 (bit 0) - the
+             obstacle course's ramp/bridge/helix deck surfaces, see
+             obstacle_course_cfr.world. gpu_lidar renders the scene to
+             compute ranges (unlike the older CPU "ray"/"lidar" sensor
+             types, which raycast against physics collision instead), so
+             this visibility_mask/visibility_flags mechanism works here;
+             it has no effect on physics - the wheels still collide with
+             and climb the deck normally. Rail visuals are deliberately
+             left at the default (visible) so the local costmap still sees
+             them as lateral boundaries. Default mask is all-bits
+             (4294967295 = 0xFFFFFFFF); clearing bit 0
+             (4294967294 = 0xFFFFFFFE) makes this lidar blind to anything
+             tagged with only that bit, while every other visual (flags
+             still all-bits by default) keeps satisfying
+             (mask & flags) != 0 and stays visible as normal. -->
+        <visibility_mask>4294967294</visibility_mask>
       </lidar>
     </sensor>
   </gazebo>
@@ -360,6 +401,13 @@
           <near>0.2</near>
           <far>6.0</far>
         </clip>
+        <!-- Same ramp-deck exclusion as lidar_sensor above (see that
+             sensor's comment) - this is the voxel_layer's other
+             obstacle-marking source, so it needs the same treatment or the
+             deck would still get marked via /oak/points even with the
+             lidar fixed. camera_sensor (RGB, above) deliberately keeps the
+             default mask - no reason to hide the ramp from a plain image. -->
+        <visibility_mask>4294967294</visibility_mask>
       </camera>
       <always_on>true</always_on>
       <update_rate>15</update_rate>

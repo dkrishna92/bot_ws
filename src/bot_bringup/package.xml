@@ -3,15 +3,16 @@
 <package format="3">
   <name>bot_bringup</name>
   <version>0.1.0</version>
-  <description>Bringup package: top-level launch files and config that compose the DIY Robot Challenge vehicle's nodes. Contains no node implementations of its own -- those live in bot_motor, bot_ultrasonic, bot_safety, and bot_perception. Sensor drivers with existing ROS 2 packages (RPLIDAR, OAK-D) are launched from their upstream packages, not reimplemented here.</description>
+  <description>Bringup package: top-level launch files and config that compose the DIY Robot Challenge vehicle's nodes. Contains no node implementations of its own -- those live in bot_motor, bot_odometry, bot_safety, bot_imu, and bot_perception. Sensor drivers with existing ROS 2 packages (RPLIDAR, OAK-D) are launched from their upstream packages, not reimplemented here.</description>
   <maintainer email="krishna.dontaraju@gmail.com">Krishna</maintainer>
   <license>Apache-2.0</license>
 
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>bot_motor</exec_depend>
-  <exec_depend>bot_ultrasonic</exec_depend>
+  <exec_depend>bot_odometry</exec_depend>
   <exec_depend>bot_safety</exec_depend>
+  <exec_depend>bot_imu</exec_depend>
   <exec_depend>bot_perception</exec_depend>
   <exec_depend>bot_gazebo</exec_depend>
   <exec_depend>rplidar_ros</exec_depend>

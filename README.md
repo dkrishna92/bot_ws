@@ -20,7 +20,7 @@ at the workspace root for the full architecture context and decision log.
 The project deliberately keeps middleware concerns separate from robot logic:
 
 - The ROS 2 middleware layer is the default RMW (Fast DDS or Cyclone DDS), not a custom message bus or ZeroMQ stack.
-- Driver and control code lives in per-concern packages such as `bot_motor`, `bot_ultrasonic`, `bot_safety`, and `bot_perception`.
+- Driver and control code lives in per-concern packages such as `bot_motor`, `bot_odometry`, `bot_safety`, `bot_imu`, and `bot_perception`.
 - Hardware logic stays in those node implementations; launch files only compose the graph and do not contain robot behavior.
 - The safety MCU and Linux/ROS stack remain intentionally separate, with the MCU handling the hard real-time e-stop cutoff and ROS nodes handling higher-level monitoring and planning.
 

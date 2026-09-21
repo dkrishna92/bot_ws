@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = "bot_ultrasonic"
+package_name = "bot_odometry"
 
 setup(
     name=package_name,
@@ -14,11 +14,11 @@ setup(
     zip_safe=True,
     maintainer="Krishna",
     maintainer_email="krishna.dontaraju@gmail.com",
-    description="Ultrasonic sensor array node (HC-SR04-class, bit-banged GPIO)",
+    description="Wheel odometry + ultrasonic from Teensy-reported serial data (real hardware only)",
     license="Apache-2.0",
     entry_points={
         "console_scripts": [
-            "ultrasonic_node = bot_ultrasonic.ultrasonic_node:main",
+            "wheel_odom_node = bot_odometry.wheel_odom_node:main",
         ],
     },
 )

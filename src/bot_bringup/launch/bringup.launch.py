@@ -1,7 +1,7 @@
 """Bringup (race) launch file.
 
-Composes the nodes owned by bot_motor, bot_ultrasonic, bot_safety, and
-bot_perception. This package intentionally contains no node
+Composes the nodes owned by bot_motor, bot_odometry, bot_safety, bot_imu,
+and bot_perception. This package intentionally contains no node
 implementations of its own -- see CLAUDE.md for why those live in
 separate per-concern packages. Sensor drivers (RPLIDAR, OAK-D) launch
 only if their packages are installed; missing drivers don't block launch.
@@ -109,15 +109,24 @@ def generate_launch_description():
         #     output="screen",
         # ),
         # Node(
-        #     package="bot_ultrasonic",
-        #     executable="ultrasonic_node",
-        #     name="ultrasonic_node",
-        #     output="screen",
-        # ),
-        # Node(
         #     package="bot_motor",
         #     executable="motor_node",
         #     name="motor_node",
+        #     output="screen",
+        # ),
+        # wheel_odom_node also owns the Teensy's ultrasonic reporting now
+        # (see teensy_ws and bot_odometry's own docstring) -- there is no
+        # separate ultrasonic node/package anymore.
+        # Node(
+        #     package="bot_odometry",
+        #     executable="wheel_odom_node",
+        #     name="wheel_odom_node",
+        #     output="screen",
+        # ),
+        # Node(
+        #     package="bot_imu",
+        #     executable="bno055_node",
+        #     name="bno055_node",
         #     output="screen",
         # ),
         # Node(
