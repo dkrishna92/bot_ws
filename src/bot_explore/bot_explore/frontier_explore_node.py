@@ -61,6 +61,18 @@ class FrontierExploreNode(Node):
         self.declare_parameter("map_topic", "map")
         self.declare_parameter("save_map_name", "src/bot_bringup/config/maps/map")
         self.declare_parameter("planning_period_s", 2.0)
+        # Nav2's DWB RotateToGoalCritic only allows rotation (no translation)
+        # once the robot is within xy_goal_tolerance (0.25 in
+        # nav2_(mapping_)params.yaml) of the *final* goal -- correct for the
+        # last few centimeters of a normal approach, but a frontier this
+        # close to the robot means that "final approach" phase covers
+        # almost the entire trip. Measured live: a frontier ~0.2-0.4m away
+        # made the robot spend 38% of a 240s episode purely rotating in
+        # place (vs. 1.9% actually driving) fighting to nail an exact final
+        # heading it had almost no distance to approach from. The robot's
+        # sensors already cover this range regardless of whether it drives
+        # there, so goals this close skip Nav2 entirely instead.
+        self.declare_parameter("min_nav_distance_m", 0.35)
         # Deliberately less than nav2_(mapping_)params.yaml's robot_radius
         # (0.26) + inflation_radius (0.35) = 0.61 total reach -- this only
         # needs to keep the goal *point itself* out of the hard/inscribed-
@@ -76,6 +88,7 @@ class FrontierExploreNode(Node):
         self._min_goal_distance = self.get_parameter("min_goal_distance_m").value
         self._save_map_name = self.get_parameter("save_map_name").value
         self._min_obstacle_clearance = self.get_parameter("min_obstacle_clearance_m").value
+        self._min_nav_distance = self.get_parameter("min_nav_distance_m").value
 
         self._map: OccupancyGrid | None = None
         self._blacklist: list[tuple[float, float]] = []
@@ -276,6 +289,18 @@ class FrontierExploreNode(Node):
                 self._save_map()
                 return
             self._found_any_frontier = True
+
+            dist_to_robot = math.hypot(goal[0] - pose[0], goal[1] - pose[1])
+            if dist_to_robot < self._min_nav_distance:
+                self.get_logger().info(
+                    f"Frontier at {goal} is only {dist_to_robot:.2f}m away -- "
+                    "already effectively covered by the robot's current sensor "
+                    "range; skipping Nav2 navigation and blacklisting instead "
+                    "of triggering DWB's near-goal rotation-only phase over "
+                    "almost no distance."
+                )
+                self._blacklist.append(goal)
+                continue
 
             if self._last_visited_goal is not None and math.hypot(
                 goal[0] - self._last_visited_goal[0], goal[1] - self._last_visited_goal[1]

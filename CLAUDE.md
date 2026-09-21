@@ -154,6 +154,60 @@ Laptop-first, Pi 5 for final integration:
   real hardware node exists in bot_bringup yet; also verify NDOF
   magnetometer fusion isn't corrupted by proximity to the motors/Pololu
   driver once mounted
+- Frontier exploration still drives slowly/unreliably in sim even after the
+  goal-placement bug below was fixed — see "Frontier exploration
+  reliability investigation" below; current lead suspect is dev-machine
+  compute contention, not a further code bug, but that isn't confirmed yet
+
+## Frontier exploration reliability investigation (2026-09-20, in progress)
+
+`mapping.launch.py`'s autonomous exploration (`bot_explore`'s
+`frontier_explore_node`) was measured as barely moving in sim on both
+courses — `scripts/measure_exploration_progress.py` (straight-line
+start→end displacement + path length over a fixed sim-time window) gives
+a repeatable way to check this rather than eyeballing it.
+
+**Confirmed and fixed:** `_find_frontiers()` was picking each frontier's
+goal as the raw arithmetic mean of a cluster's cells. A cluster that wraps
+around an obstacle corner — which is exactly what creates a frontier there
+in the first place, since the sensor shadow behind the obstacle is the
+unknown space — can have a mean that lands outside every real free cell,
+sometimes exactly on the obstacle itself, even though each individual
+member cell is genuinely free. Checked against both course world files:
+pre-fix goals landed 0.00–0.44m from a real bale. Fixed by using each
+cluster's medoid (an actual member cell) instead of the mean, plus a new
+`min_obstacle_clearance_m` param that drops clusters without room around
+them. Before/after (60s sim-time window, displacement / path length):
+obstacle course 0.008m / 0.075m → 0.325m / 0.325m; speed course
+0.000m / 0.000m → 0.199m / 0.864m.
+
+**Added, but unproven for the remaining slowness:** `min_nav_distance_m`
+skips sending Nav2 a goal already within the robot's own approach
+tolerance, meant to avoid triggering DWB's `RotateToGoalCritic`'s
+rotation-only phase over a trip too short to need it. The specific case
+that motivated this turned out to be a coordinate-frame mistake in the
+analysis (a `map`-frame goal compared directly against a `world`-frame
+spawn point) — the goal in question was actually ~0.88m away, not ~0.18m,
+so this fix doesn't explain the stall it was built to address. Kept as a
+defensive measure for genuinely-close frontiers, not as a proven fix.
+
+**Still unresolved, current lead suspect is the dev machine, not the
+code:** even with the above fix, a 240s run spent 60% idle, 38.1% purely
+rotating in place (hitting the configured 1.0 rad/s max), and only 1.9%
+actually driving (capped at 0.21 m/s, well under the configured 0.5 max/s)
+— while the local costmap was completely empty (checked live, zero
+nonzero cells) for the entire stall. Logs showed the global planner hand
+DWB a new path roughly once per second (`Passing new path to controller`),
+`Control loop missed its desired rate of 20Hz` (actual 6.7–13.9Hz), and a
+plain 90° `spin` recovery timing out in open space. A host-level check
+during one run found two unrelated `ruby` processes consuming ~3 CPU
+cores and `/clock` actively dropping messages ("message was lost", 282 in
+one sample) — consistent with CPU contention starving the control loop
+rather than a Nav2/DWB config problem. **Not yet confirmed** via Gazebo's
+own real-time-factor stat (`gz stats` — watch for RTF sustained well below
+1.0 during a run); do that before spending more effort retuning DWB
+critics or the progress checker, since a starved control loop can't be
+fixed by retuning it.
 
 ## Nav2 planner/controller comparison (in progress, not a decided architecture)
 
