@@ -11,8 +11,8 @@ RUN apt update && apt install -y \
 
 WORKDIR /root/bot_ws
 
-# Build:
-#   docker build -t bot_ws_jazzy -f DockerFile .
+# Build (from the repo root):
+#   docker build -t bot_ws_jazzy -f docker/Dockerfile .
 #
 # On the host, allow the container to use the X server (needed for Gazebo's GUI):
 #   xhost +local:docker

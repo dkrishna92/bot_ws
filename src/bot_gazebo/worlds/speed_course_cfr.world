@@ -453,7 +453,15 @@
     <model name="start_signal_frame"><static>true</static><pose>17.0116 3.8895 0 0 0 1.57080</pose>
       <link name="link">
         <visual name="frame_visual"><pose>0.0000 0.0000 0.0000 0.0000 0.0000 0.0000</pose><geometry><mesh><uri>model://cfr_arduino_bridge/meshes/start_signal_frame.stl</uri></mesh></geometry><material><diffuse>0.00 0.64 0.92 1</diffuse></material></visual>
-        <collision name="post_collision"><pose>0 0 0.61 0 0 0</pose><geometry><box><size>0.813 0.10 1.219</size></box></geometry></collision>
+        <!-- Two side posts, NOT one solid slab. The frame is an open gate the
+             robot drives through; the old single 0.813-wide box collision
+             walled off the whole opening (invisible vs the open-arch visual),
+             blocking the start and painting a phantom wall into the lidar map
+             / global costmap right in front of the spawn. Post x-offsets are
+             inferred from the old box's 0.813 span; eyeball against the
+             frame mesh in the GUI once loaded. -->
+        <collision name="post_left_collision"><pose>0.3565 0 0.61 0 0 0</pose><geometry><box><size>0.10 0.10 1.219</size></box></geometry></collision>
+        <collision name="post_right_collision"><pose>-0.3565 0 0.61 0 0 0</pose><geometry><box><size>0.10 0.10 1.219</size></box></geometry></collision>
       </link>
     </model>
     <model name="start_signal_arms">

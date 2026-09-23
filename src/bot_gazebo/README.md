@@ -17,8 +17,8 @@ ros2 launch bot_bringup bringup.launch.py use_sim:=true
 
 This will:
 - Start Gazebo Sim (server + GUI)
-- Spawn `bot` (from `urdf/bot.urdf.xacro`) at (-0.7, 0, 0), the course start pose
-- Load `obstacle_course_cfr.world` (default — pass `world:=<name>` to pick
+- Spawn `bot` (from `urdf/bot.urdf.xacro`) at the spawned world's course start pose
+- Load `speed_course_cfr.world` (default — pass `world:=<name>` to pick
   another course, see `GAZEBO_WORLDS.md` for the full list)
 - Start all custom nodes (motor, ultrasonic, watchdog, start trigger) and,
   if installed, `robot_localization` + the full Nav2 stack (requires a map

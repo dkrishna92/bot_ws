@@ -28,7 +28,7 @@
         <color rgba="0.2 0.2 0.8 1.0"/>  <!-- Blue -->
       </material>
     </visual>
-    <collision>
+    <collision name="base_collision">
       <origin xyz="0 0 ${base_height/2}" rpy="0 0 0"/>
       <geometry>
         <box size="${base_length} ${base_width} ${base_height}"/>
@@ -164,7 +164,9 @@
 
   <!-- Lidar Joint -->
   <joint name="lidar_joint" type="fixed">
-    <origin xyz="0 0 ${base_height + 0.06}" rpy="0 0 0"/>
+    <!-- +0.12 (was +0.06): puts the scan plane at ~0.296m, clear of the
+         wheel tops (~0.24m) so the lidar can't graze its own wheels. -->
+    <origin xyz="0 0 ${base_height + 0.12}" rpy="0 0 0"/>
     <parent link="base_link"/>
     <child link="lidar_link"/>
   </joint>
@@ -194,15 +196,16 @@
          directly instead of inferred from TF/cmd_vel mismatches. Requires
          the gz-sim-contact-system plugin to be loaded on the world (see
          bot_gazebo/worlds/*_cfr.world) - unlike camera/lidar, contact
-         sensors produce no output at all without it. "collision" is
-         sdformat_urdf's default generated name for base_link's single,
-         unnamed URDF <collision> element; if this sensor stays silent,
-         verify the real name via `gz topic -l | grep contact`.
+         sensors produce no output at all without it. The referenced
+         collision name must match base_link's <collision name="...">
+         above: sdformat_urdf does NOT name an unnamed URDF collision
+         "collision" (it uses <link>_collision), so the name is set
+         explicitly on both sides to avoid a silent no-match.
          An explicit <topic> avoids having to guess gz-sim's auto-generated
          hierarchical topic name when bridging in gazebo_sim.launch.py. -->
     <sensor name="base_contact_sensor" type="contact">
       <contact>
-        <collision>collision</collision>
+        <collision>base_collision</collision>
         <topic>/bot_contacts</topic>
       </contact>
       <update_rate>30</update_rate>
@@ -272,8 +275,15 @@
     <!-- Publishes joint positions on gz-transport so robot_state_publisher
          can compute base_link -> *_wheel TF. Without this the wheel joints
          are non-fixed (continuous) but nothing reports their position, so
-         robot_state_publisher has nothing to publish their transform from. -->
-    <plugin filename="gz-sim-joint-state-publisher-system" name="gz::sim::systems::JointStatePublisher"/>
+         robot_state_publisher has nothing to publish their transform from.
+         Explicit <topic> pins a fixed name instead of the default
+         /world/<world>/model/<model>/joint_state, whose <world> segment is
+         the world file's INTERNAL name (e.g. cfr_speed_course), not its
+         filename/launch-arg (speed_course_cfr), bridging the auto name
+         would silently miss, leaving no wheel links in TF. -->
+    <plugin filename="gz-sim-joint-state-publisher-system" name="gz::sim::systems::JointStatePublisher">
+      <topic>joint_states</topic>
+    </plugin>
 
     <!-- Ground-truth pose publisher, sim-only diagnostic, NOT part of the
          real robot's sensor suite. DiffDrive's /odom above is kinematic

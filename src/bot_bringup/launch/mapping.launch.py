@@ -2,14 +2,28 @@
 that bringup.launch.py localizes against on race day. Not part of the race
 launch itself; bringup.launch.py does not build a map, only consumes one.
 
-Fully autonomous: bot_explore's frontier_explore_node drives the robot
-around unexplored space via Nav2 until slam_toolbox's live map is fully
-covered, then saves it -- no teleop needed.
+Two driving modes:
+  - Autonomous (default): bot_explore's frontier_explore_node drives the
+    robot around unexplored space via Nav2 until slam_toolbox's live map is
+    fully covered, then saves it -- no teleop needed.
+  - Teleop (teleop:=true): Nav2 and frontier_explore_node are skipped
+    entirely; drive manually with teleop_twist_keyboard in a *separate*
+    terminal (it needs a real TTY for keyboard capture, which a `ros2
+    launch` subprocess can't give it), then save the map yourself once
+    you've covered the course -- see Usage below.
 
 Usage:
     # Run from the workspace root (bot_ws/) so the default map save path
     # below resolves correctly.
     ros2 launch bot_bringup mapping.launch.py use_sim:=true
+
+    # Teleop mode instead of autonomous frontier exploration:
+    ros2 launch bot_bringup mapping.launch.py use_sim:=true teleop:=true
+    # ...then in a separate terminal:
+    ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r cmd_vel:=/cmd_vel
+    # ...and once you've driven the whole course, save the map manually:
+    ros2 service call /slam_toolbox/save_map slam_toolbox/srv/SaveMap \
+        "{name: {data: 'src/bot_bringup/config/maps/map'}}"
 
     # Or point the save path elsewhere explicitly:
     ros2 launch bot_bringup mapping.launch.py use_sim:=true \
@@ -23,7 +37,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, NotEqualsSubstitution
 from launch.conditions import IfCondition
 from launch_ros.actions import Node
 
@@ -52,13 +66,22 @@ def generate_launch_description():
             description='Launch RViz2 with the Nav2 default view',
         ),
         DeclareLaunchArgument(
+            'teleop',
+            default_value='false',
+            description=(
+                'Skip Nav2 and frontier_explore_node; drive manually via '
+                'teleop_twist_keyboard in a separate terminal instead (see '
+                'this file\'s module docstring for the exact commands).'
+            ),
+        ),
+        DeclareLaunchArgument(
             'headless',
             default_value='false',
             description='Run Gazebo headless (forwarded to gazebo_sim.launch.py)',
         ),
         DeclareLaunchArgument(
             'world',
-            default_value='obstacle_course_cfr',
+            default_value='speed_course_cfr',
             description=(
                 'World to load (forwarded to gazebo_sim.launch.py): '
                 'obstacle_course_cfr, speed_course_cfr, obstacle_course, '
@@ -156,6 +179,8 @@ def generate_launch_description():
         # frontier explorer below has something to send goals to. Localizes
         # against slam_toolbox's live /map, not amcl -- see bringup.launch.py
         # for the pre-built-map (amcl + map_server) race-day equivalent.
+        # Skipped entirely in teleop mode -- nothing needs it without
+        # frontier_explore_node sending goals.
         #
         # nav2_mapping_params.yaml, not nav2_params.yaml -- see that file's
         # global_costmap comment for why mapping needs its own copy rather
@@ -164,6 +189,7 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(
                 PathJoinSubstitution([pkg_nav2, 'launch', 'navigation_launch.py'])
             ),
+            condition=IfCondition(NotEqualsSubstitution(LaunchConfiguration('teleop'), 'true')),
             launch_arguments={
                 'namespace': '',
                 'use_sim_time': LaunchConfiguration('use_sim'),
@@ -173,11 +199,14 @@ def generate_launch_description():
         ),
 
         # Drives exploration autonomously, then saves the map when done --
-        # see bot_explore/frontier_explore_node.py
+        # see bot_explore/frontier_explore_node.py. Skipped in teleop mode;
+        # drive manually instead and save the map yourself (see module
+        # docstring) once you've covered the course.
         Node(
             package='bot_explore',
             executable='frontier_explore_node',
             output='screen',
+            condition=IfCondition(NotEqualsSubstitution(LaunchConfiguration('teleop'), 'true')),
             parameters=[{
                 'use_sim_time': LaunchConfiguration('use_sim'),
                 'save_map_name': LaunchConfiguration('map_save_path'),

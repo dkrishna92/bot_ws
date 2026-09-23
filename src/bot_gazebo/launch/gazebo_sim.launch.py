@@ -3,12 +3,49 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, Command, PathJoinSubstitution, TextSubstitution
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch.conditions import IfCondition, UnlessCondition
+
+# Per-world default spawn pose, near each course's start_signal_frame (the
+# only start-line marker still present in these files -- the old "slash"
+# placeholder vehicle model these were imported alongside no longer exists
+# in either file). These are best-effort estimates from the frame's own
+# pose, not visually verified -- override with spawn_x/spawn_y/spawn_yaw
+# launch args to nudge live in the GUI rather than editing this file.
+_DEFAULT_SPAWN_POSES = {
+    'obstacle_course_cfr': (-0.7, 0.0, 0.0),
+    'speed_course_cfr': (19.0, 4.75, 3.14159265),
+}
+_FALLBACK_SPAWN_POSE = (-0.7, 0.0, 0.0)
+
+
+def _spawn_robot(context, *args, **kwargs):
+    """Build the spawn Node with a per-world default pose, resolved at launch
+    time since 'world' is only known once substitutions are performed."""
+    world_name = LaunchConfiguration('world').perform(context)
+    default_x, default_y, default_yaw = _DEFAULT_SPAWN_POSES.get(world_name, _FALLBACK_SPAWN_POSE)
+
+    def _resolve(arg_name, default_value):
+        value = LaunchConfiguration(arg_name).perform(context)
+        return str(default_value) if value == 'nan' else value
+
+    return [Node(
+        package='ros_gz_sim',
+        executable='create',
+        arguments=[
+            '-topic', 'robot_description',
+            '-name', 'bot',
+            '-x', _resolve('spawn_x', default_x),
+            '-y', _resolve('spawn_y', default_y),
+            '-z', _resolve('spawn_z', 0.0),
+            '-Y', _resolve('spawn_yaw', default_yaw),
+        ],
+        output='screen',
+    )]
 
 
 def generate_launch_description():
@@ -37,8 +74,28 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'world',
-            default_value='obstacle_course_cfr',
+            default_value='speed_course_cfr',
             description='World to load: obstacle_course_cfr, speed_course_cfr, obstacle_course, speed_course, or onshape_course',
+        ),
+        DeclareLaunchArgument(
+            'spawn_x',
+            default_value='nan',
+            description='Override the robot spawn X position (default: per-world start-line estimate)',
+        ),
+        DeclareLaunchArgument(
+            'spawn_y',
+            default_value='nan',
+            description='Override the robot spawn Y position (default: per-world start-line estimate)',
+        ),
+        DeclareLaunchArgument(
+            'spawn_z',
+            default_value='nan',
+            description='Override the robot spawn Z position (default: 0.0)',
+        ),
+        DeclareLaunchArgument(
+            'spawn_yaw',
+            default_value='nan',
+            description='Override the robot spawn yaw in radians (default: per-world start-line estimate)',
         ),
         DeclareLaunchArgument(
             'headless',
@@ -93,20 +150,13 @@ def generate_launch_description():
             }.items(),
         ),
 
-        # Spawn the robot from the published robot_description, at the
-        # course start pose (previously occupied by the placeholder "slash" model)
-        Node(
-            package='ros_gz_sim',
-            executable='create',
-            arguments=[
-                '-topic', 'robot_description',
-                '-name', 'bot',
-                '-x', '-0.7',
-                '-y', '0.0',
-                '-z', '0.0',
-            ],
-            output='screen',
-        ),
+        # Spawn the robot from the published robot_description, at a
+        # per-world start-line pose (see _DEFAULT_SPAWN_POSES above -- the
+        # placeholder "slash" model these courses were imported alongside
+        # no longer exists in either file, so this is a best estimate from
+        # each course's start_signal_frame; override with spawn_x/spawn_y/
+        # spawn_yaw to nudge it live instead of editing this file).
+        OpaqueFunction(function=_spawn_robot),
 
         # Publish static transform: map -> odom -- only when nothing else owns it (see publish_static_map_odom arg above)
         Node(
@@ -142,8 +192,10 @@ def generate_launch_description():
                 # Wheel joint positions, from the gz-sim-joint-state-publisher-
                 # system plugin on bot.urdf.xacro -- needed for
                 # robot_state_publisher to compute base_link -> *_wheel TF.
-                ['/world/', world_arg, '/model/bot/joint_state',
-                 '@sensor_msgs/msg/JointState[gz.msgs.Model'],
+                # Bridges the plugin's pinned 'joint_states' topic (see its
+                # <topic> in bot.urdf.xacro) rather than the world-namespaced
+                # auto name, which depends on the world's internal name.
+                '/joint_states@sensor_msgs/msg/JointState[gz.msgs.Model',
                 # Diagnostic contact sensor from bot.urdf.xacro -- lets real
                 # collisions (e.g. clipping a bale) be observed directly via
                 # `ros2 topic echo /bot_contacts` instead of inferred from
@@ -157,7 +209,6 @@ def generate_launch_description():
                 '/model/bot/pose@geometry_msgs/msg/Pose[gz.msgs.Pose',
             ],
             remappings=[
-                (['/world/', world_arg, '/model/bot/joint_state'], 'joint_states'),
                 ('/oak/depth/points', '/oak/points'),
             ],
             output='screen',
