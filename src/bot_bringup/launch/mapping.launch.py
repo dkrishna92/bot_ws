@@ -29,25 +29,94 @@ Usage:
     ros2 launch bot_bringup mapping.launch.py use_sim:=true \
         map_save_path:=/absolute/path/to/bot_ws/src/bot_bringup/config/maps/map
 
+    # Resume mapping from a previously-saved (incomplete) map instead of an
+    # empty one -- useful for iterating on a stall/bug that only shows up
+    # partway through a run, without re-exploring/re-driving the whole
+    # course from scratch every time. Save a checkpoint mid-run with:
+    #   ros2 service call /slam_toolbox/save_map slam_toolbox/srv/SaveMap \
+    #       "{name: {data: 'src/bot_bringup/config/maps/checkpoint'}}"
+    # then resume from it (resume_pose is the robot's actual x,y,yaw in the
+    # checkpoint map's frame when it was saved -- get this from `ros2 run
+    # tf2_ros tf2_echo map base_link` at save time). In use_sim mode this
+    # also spawns the simulated robot at resume_pose (see gazebo_sim
+    # include below) so the sim robot's actual location and slam_toolbox's
+    # belief about where it's resuming from stay in sync -- on real
+    # hardware you're responsible for physically placing the robot there
+    # yourself instead:
+    ros2 launch bot_bringup mapping.launch.py use_sim:=true teleop:=true \
+        resume_map:=src/bot_bringup/config/maps/checkpoint \
+        resume_pose:=1.2,3.4,0.5
+
     # Rebuild so the saved map is installed to the share directory, then
     # bringup.launch.py can localize against it on race day:
     colcon build --packages-select bot_bringup
 """
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, NotEqualsSubstitution
 from launch.conditions import IfCondition
-from launch_ros.actions import Node
+from launch_ros.actions import Node, LifecycleNode
 
 
 def generate_launch_description():
     pkg_gazebo = get_package_share_directory('bot_gazebo')
     pkg_bringup = get_package_share_directory('bot_bringup')
-    pkg_robot_loc = get_package_share_directory('robot_localization')
-    pkg_slam_toolbox = get_package_share_directory('slam_toolbox')
     pkg_nav2 = get_package_share_directory('nav2_bringup')
+
+    def _slam_toolbox_node(context, *args, **kwargs):
+        x_str, y_str, yaw_str = LaunchConfiguration('resume_pose').perform(context).split(',')
+        return [
+            LifecycleNode(
+                package='slam_toolbox',
+                executable='async_slam_toolbox_node',
+                name='slam_toolbox',
+                namespace='',
+                output='screen',
+                parameters=[
+                    PathJoinSubstitution([pkg_bringup, 'config', 'slam_toolbox_params.yaml']).perform(context),
+                    {
+                        'use_sim_time': LaunchConfiguration('use_sim').perform(context) == 'true',
+                        'map_file_name': LaunchConfiguration('resume_map').perform(context),
+                        'map_start_pose': [float(x_str), float(y_str), float(yaw_str)],
+                    },
+                ],
+            )
+        ]
+
+    def _gazebo_include(context, *args, **kwargs):
+        # resume_pose must match wherever the robot is actually spawned, not
+        # just what slam_toolbox is told to believe -- otherwise the sim
+        # robot spawns at the course's normal start while slam_toolbox
+        # assumes it's out at the checkpoint, an immediate map/reality
+        # mismatch (the same class of "loses position" symptom a stale
+        # amcl initial_pose caused elsewhere in this project). Forwarding
+        # resume_pose's x/y/yaw here keeps both in sync from one value
+        # instead of two that could drift apart. 'nan' (unchanged) when
+        # resume_map is empty -- gazebo_sim.launch.py's own per-world
+        # default spawn pose applies as normal.
+        resume_map = LaunchConfiguration('resume_map').perform(context)
+        if resume_map:
+            x_str, y_str, yaw_str = LaunchConfiguration('resume_pose').perform(context).split(',')
+        else:
+            x_str = y_str = yaw_str = 'nan'
+        return [
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    PathJoinSubstitution([pkg_gazebo, 'launch', 'gazebo_sim.launch.py'])
+                ),
+                condition=IfCondition(LaunchConfiguration('use_sim')),
+                launch_arguments={
+                    'publish_static_map_odom': 'false',
+                    'headless': LaunchConfiguration('headless'),
+                    'world': LaunchConfiguration('world'),
+                    'spawn_x': x_str,
+                    'spawn_y': y_str,
+                    'spawn_yaw': yaw_str,
+                }.items(),
+            )
+        ]
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -101,20 +170,29 @@ def generate_launch_description():
                 'planner/controller comparison section.'
             ),
         ),
+        DeclareLaunchArgument(
+            'resume_map',
+            default_value='',
+            description=(
+                'Path prefix (no extension) of a previously-saved '
+                'slam_toolbox map to continue mapping from, instead of '
+                'starting empty -- see this file\'s module docstring. '
+                'Empty (default) = start a fresh map.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'resume_pose',
+            default_value='0.0,0.0,0.0',
+            description=(
+                'Comma-separated "x,y,yaw" pose to resume at within '
+                'resume_map -- ignored when resume_map is empty.'
+            ),
+        ),
 
         # Conditionally include Gazebo -- slam_toolbox owns map->odom here, so tell
-        # gazebo_sim.launch.py not to also publish it
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                PathJoinSubstitution([pkg_gazebo, 'launch', 'gazebo_sim.launch.py'])
-            ),
-            condition=IfCondition(LaunchConfiguration('use_sim')),
-            launch_arguments={
-                'publish_static_map_odom': 'false',
-                'headless': LaunchConfiguration('headless'),
-                'world': LaunchConfiguration('world'),
-            }.items(),
-        ),
+        # gazebo_sim.launch.py not to also publish it. Spawn pose is resolved
+        # in _gazebo_include above (matches resume_pose when resume_map is set).
+        OpaqueFunction(function=_gazebo_include),
 
         # Odometry fusion -- slam_toolbox's scan matching is more accurate
         # with a fused odom input than raw wheel/ackermann odometry alone.
@@ -134,35 +212,25 @@ def generate_launch_description():
         ),
 
         # SLAM: builds the map live from /scan as the robot moves.
+        # Constructed directly (not via slam_toolbox's own
+        # online_async_launch.py) so map_file_name/map_start_pose can be
+        # overridden per-launch for resume_map/resume_pose above --
+        # online_async_launch.py only exposes slam_params_file/
+        # use_sim_time/use_lifecycle_manager as launch arguments, with no
+        # way to override individual params inside that file without
+        # editing it. Package/executable/name/parameters below are an exact
+        # copy of that launch file's own node (confirmed against
+        # slam_toolbox's upstream source), minus its auto-configure/
+        # activate EmitEvent/RegisterEventHandler pair -- those only fire
+        # when use_lifecycle_manager is false, and we always run with our
+        # own external lifecycle_manager (below) instead, for the same
+        # startup-race reason explained there.
+        #
         # slam_params_file overrides slam_toolbox's own stock default, whose
         # base_frame ("base_footprint") this robot doesn't have -- without
         # this override slam_toolbox spins forever on "Failed to compute
         # odom pose" and never publishes /map.
-        #
-        # use_lifecycle_manager: true here disables online_async_launch.py's
-        # own built-in auto-configure/activate (a one-shot EmitEvent fired
-        # at launch-graph-build time, with no wait/retry for the node's
-        # lifecycle service to exist yet). That race loses outright whenever
-        # slam_toolbox is slow to come up -- which stack_size_to_use above
-        # makes it, since reallocating a 40MB stack for large-map
-        # serialization delays when its lifecycle interface is ready. Lost
-        # race means slam_toolbox sits in "unconfigured" forever: never
-        # subscribes to /scan, never publishes /map, and every downstream
-        # consumer (global costmap's static_layer, frontier_explore_node)
-        # waits on a map that will never come -- "mapping doesn't map".
-        # The lifecycle_manager below owns activation instead, the same
-        # proven-reliable retrying pattern nav2_bringup itself uses for
-        # amcl/map_server/controller_server in bringup.launch.py.
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                PathJoinSubstitution([pkg_slam_toolbox, 'launch', 'online_async_launch.py'])
-            ),
-            launch_arguments={
-                'use_sim_time': LaunchConfiguration('use_sim'),
-                'slam_params_file': PathJoinSubstitution([pkg_bringup, 'config', 'slam_toolbox_params.yaml']),
-                'use_lifecycle_manager': 'true',
-            }.items(),
-        ),
+        OpaqueFunction(function=_slam_toolbox_node),
         Node(
             package='nav2_lifecycle_manager',
             executable='lifecycle_manager',

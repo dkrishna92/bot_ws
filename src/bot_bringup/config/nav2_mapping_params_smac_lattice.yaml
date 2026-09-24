@@ -1,6 +1,10 @@
 # ============================================================================
-# A/B TEST VARIANT (SmacPlannerLattice planner): planner_server.GridBased swapped, everything
-# else is an exact copy of nav2_mapping_params.yaml.
+# A/B TEST VARIANT (SmacPlannerLattice planner + MPPI controller): both
+# planner_server.GridBased AND controller_server.FollowPath are swapped
+# from nav2_mapping_params.yaml -- originally planner-only, but live A/B
+# testing showed MPPI made more progress into a turn than DWB before
+# stalling, so this variant's controller was switched to (tuned) MPPI too.
+# For a NavFn+MPPI comparison instead, see nav2_mapping_params_mppi.yaml.
 # See CLAUDE.md's "Nav2 planner/controller comparison" section for the
 # full rationale and test protocol.
 # Launch with:
@@ -115,62 +119,102 @@ controller_server:
     controller_plugins: ["FollowPath"]
 
     FollowPath:
-      plugin: "dwb_core::DWBLocalPlanner"
-      debug_trajectory_details: true
-      max_vel_x: 0.5
-      min_vel_x: 0.0
-      max_vel_y: 0.0
-      min_vel_y: 0.0
-      max_vel_theta: 1.0
-      min_speed_xy: 0.0
-      max_speed_xy: 0.5
-      min_speed_theta: 0.0
-      max_speed_theta: 1.0
-      acc_lim_x: 2.5
-      acc_lim_y: 0.0
-      acc_lim_theta: 3.2
-      decel_lim_x: -2.5
-      decel_lim_y: 0.0
-      decel_lim_theta: -3.2
-      vx_samples: 20
-      vy_samples: 5
-      vtheta_samples: 20
-      sim_time: 1.7
-      linear_granularity: 0.05
-      angular_granularity: 0.025
-      transform_tolerance: 0.2
-      xy_goal_tolerance: 0.25
-      trans_stopped_velocity: 0.25
-      short_circuit_trajectory_evaluation: true
-      stateful: true
-      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign"]
-      BaseObstacle:
-          # 0.3 overpowered PathAlign/GoalAlign in the tight corridor,
-          # making the robot back away from obstacles ahead instead of
-          # continuing to follow the path -- 0.1 is a middle ground.
-          scale: 0.1
-          max_scaling_factor: 0.1
-          scoring_pose_frame: "base_link"
-      GoalAlign:
-          scale: 24.0
-          forward_point_distance: 0.325
-      PathAlign:
-          scale: 32.0
-          forward_point_distance: 0.325
-      RotateToGoal:
-          # Lowered from 32 -- tied with PathAlign, RotateToGoal was
-          # dominating trajectory scoring and making the robot repeatedly
-          # spin in place to face the path instead of driving forward
-          # along it in tight corridors.
-          scale: 8.0
-          slowing_factor: 5.0
-          lookahead_time: -1.0
-      Oscillation:
-          scale: 1.0
-          # Requires more forward progress before a reversal trajectory is
-          # allowed again -- default 0.05m let the robot flip-flop forward
-          # and backward almost immediately.
-          oscillation_reset_dist: 0.3
+      # Swapped from DWB to MPPI -- empirically, MPPI made noticeably more
+      # progress into a turn before stalling than DWB+SmacPlannerLattice
+      # did (per live A/B testing), so this variant now pairs
+      # SmacPlannerLattice with MPPI instead. Tuning below starts from
+      # nav2_mapping_params_mppi.yaml's config, with the turn-stall fix
+      # from that file also applied here -- see that file's comments for
+      # per-param rationale.
+      plugin: "nav2_mppi_controller::MPPIController"
+      time_steps: 56
+      model_dt: 0.05
+      batch_size: 2000
+      ax_max: 3.0
+      ax_min: -3.0
+      ay_max: 3.0
+      az_max: 3.5
+      # Reverted -- widening these to 0.3/0.6 made behavior worse (live
+      # test), back to nav2_bringup's reference-config values.
+      vx_std: 0.2
+      vy_std: 0.2
+      wz_std: 0.4
+      vx_max: 0.1
+      vx_min: 0.0
+      vy_max: 0.0
+      wz_max: 1.9
+      # Reverted -- raising this to 2 made behavior worse (live test),
+      # back to nav2_bringup's reference-config value.
+      iteration_count: 1
+      prune_distance: 1.7
+      transform_tolerance: 0.1
+      temperature: 0.3
+      gamma: 0.015
+      motion_model: "DiffDrive"
+      visualize: false
+      regenerate_noises: false
+      TrajectoryVisualizer:
+        trajectory_step: 5
+        time_step: 3
+      critics: ["ConstraintCritic", "CostCritic", "GoalCritic", "GoalAngleCritic",
+                "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic"]
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 1.4
+      GoalAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.0
+        threshold_to_consider: 0.5
+        symmetric_yaw_tolerance: true
+      PreferForwardCritic:
+        # Reverted to 5.0 -- lowering this to 3.0 made behavior worse (live
+        # test), back to nav2_bringup's reference-config value.
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 0.5
+      CostCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.81
+        near_collision_cost: 253
+        critical_cost: 300.0
+        consider_footprint: false
+        collision_cost: 1000000.0
+        near_goal_distance: 1.0
+        trajectory_point_step: 2
+      PathAlignCritic:
+        # Reverted to 14.0 -- lowering this to 10.0 made behavior worse
+        # (live test), back to nav2_bringup's reference-config value.
+        enabled: true
+        cost_power: 1
+        cost_weight: 14.0
+        max_path_occupancy_ratio: 0.05
+        trajectory_point_step: 4
+        threshold_to_consider: 0.5
+        offset_from_furthest: 20
+        use_path_orientations: false
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        offset_from_furthest: 5
+        threshold_to_consider: 1.4
+      PathAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.0
+        offset_from_furthest: 4
+        threshold_to_consider: 0.5
+        max_angle_to_furthest: 1.0
+        mode: 0
 
 local_costmap:
   local_costmap:

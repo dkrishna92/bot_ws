@@ -33,11 +33,11 @@ Publishes:
     Nav2 range_sensor_layer config can reference them unchanged.
 
 wheel_radius_m/track_width_m below should stay numerically in sync with
-bot.urdf.xacro's wheel_radius/track_width properties. ticks_per_rev is a
-placeholder pending the actual encoder part number/CPR -- same
-pending-hardware-spec status as the project's RPLIDAR baudrate and the
-ultrasonic trigger/echo pin assignment on the Teensy (see CLAUDE.md open
-items).
+bot.urdf.xacro's wheel_radius/track_width properties. ticks_per_rev is the
+real encoder spec now (Pololu #4843: 48 CPR motor shaft x 20.4:1 gear ratio
+= 979.62 CPR gearbox output shaft) -- not a placeholder anymore, unlike the
+project's still-unconfirmed RPLIDAR baudrate and the ultrasonic trigger/echo
+pin assignment on the Teensy (see CLAUDE.md open items).
 """
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ class WheelOdomNode(Node):
 
         self.declare_parameter("serial_port", "/dev/ttyACM0")
         self.declare_parameter("baud", 115200)
-        self.declare_parameter("ticks_per_rev", 1200)
+        self.declare_parameter("ticks_per_rev", 979.62)
         self.declare_parameter("wheel_radius_m", 0.12)
         self.declare_parameter("track_width_m", 0.22)
 

@@ -264,7 +264,14 @@
       <right_joint>rear_right_wheel_joint</right_joint>
       <wheel_separation>${track_width}</wheel_separation>
       <wheel_radius>${wheel_radius}</wheel_radius>
-      <max_wheel_torque>20</max_wheel_torque>
+      <!-- Real motor: Pololu #4843, 20.4:1 25D 12V HP gearmotor. Extrapolated
+           stall torque is 7.4 kg-cm (~0.73 N-m) per wheel; the previous 20
+           N-m here was a placeholder ~27x too high, letting sim pivot-turns
+           succeed unrealistically easily in-place skid-steer rotation
+           needs torque in roughly this same 0.6-0.9 N-m range just to
+           overcome scrub friction (see CLAUDE.md), so this is a genuinely
+           load-bearing limit now, not a formality. -->
+      <max_wheel_torque>0.73</max_wheel_torque>
       <max_linear_acceleration>1.0</max_linear_acceleration>
       <topic>cmd_vel</topic>
       <odom_topic>odom</odom_topic>

@@ -48,8 +48,20 @@ Hard constraints from the rules doc:
   see `bot_odometry`'s wheel_odom_node below. This Teensy now handles
   encoder AND ultrasonic reporting (see Ultrasonic above) over its one USB
   serial link; it is NOT the e-stop MCU (that's a separate Arduino Nano,
-  see Safety architecture). Encoder part number/CPR and exact pin
-  assignment TBD — same pending-spec status as the RPLIDAR model below.
+  see Safety architecture). Encoder part number/CPR confirmed 2026-09-24:
+  Pololu #4843 (20.4:1 25D 12V HP gearmotor, 48 CPR motor-shaft encoder =
+  979.62 CPR at the gearbox output shaft). Exact Teensy pin assignment
+  still TBD — same pending-spec status as the RPLIDAR model below.
+- Drive motors: Pololu #4843 (20.4:1 25D 12V HP gearmotor), one per wheel,
+  paired 2-per-side onto the Pololu G2 driver's two channels (matches the
+  DiffDrive plugin's per-side joint grouping above). Real spec (12V):
+  500 RPM/300 mA no-load, 7.4 kg-cm (~0.73 N-m) stall torque @ 5.0 A
+  extrapolated, 4 kg-cm (~0.39 N-m) recommended continuous limit.
+  `bot.urdf.xacro`'s `max_wheel_torque` now matches this stall figure
+  (previously a 20 N-m placeholder, ~27x too high) — in-place skid-steer
+  rotation needs torque in roughly this same range just to overcome scrub
+  friction, so real hardware may find pivot turns noticeably harder than
+  the old, unrealistically generous sim behavior suggested.
 - IMU: Bosch BNO055 — 9-DOF (accel + gyro + magnetometer) with onboard
   sensor fusion; outputs an absolute, magnetically-referenced orientation
   directly from the chip, not just raw gyro. Interface decided (2026-09-20):
@@ -197,10 +209,12 @@ Laptop-first, Pi 5 for final integration:
   logic against a wireless receiver module's heartbeat) but untested on
   real hardware; `RELAY_PIN`, relay active-high/low polarity, and the
   receiver module's actual serial framing/baud are still placeholders
-- Wheel encoder part number/CPR and Teensy pin assignment TBD — real
-  hardware not yet in hand; `bot_odometry`'s wheel_odom_node and the Teensy
-  firmware in `teensy_ws` are written against placeholder values
-  (ticks_per_rev=1200) that need updating once encoders are chosen
+- Wheel encoder Teensy pin assignment TBD — real hardware not yet in hand;
+  the Teensy firmware in `teensy_ws` is written against a placeholder pin
+  assignment. Part number/CPR is no longer a placeholder — confirmed
+  2026-09-24 as Pololu #4843 (979.62 CPR at the gearbox output shaft);
+  `bot_odometry`'s wheel_odom_node's `ticks_per_rev` default is updated to
+  match (was a 1200 placeholder).
 - Nav2 params: `robot_radius` now matches `bot.urdf.xacro`'s real footprint
   and the map-then-race launch wiring (mapping.launch.py / bringup.launch.py)
   is in place; costmap inflation and controller gains are being addressed

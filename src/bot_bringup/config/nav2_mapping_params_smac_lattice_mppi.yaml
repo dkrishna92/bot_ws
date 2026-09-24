@@ -1,18 +1,23 @@
 # ============================================================================
-# A/B TEST VARIANT (MPPI controller): controller_server.FollowPath swapped, everything
-# else is an exact copy of nav2_mapping_params.yaml.
-# See CLAUDE.md's "Nav2 planner/controller comparison" section for the
-# full rationale and test protocol.
+# A/B TEST VARIANT (SmacPlannerLattice planner + MPPI controller combined):
+# planner_server.GridBased AND controller_server.FollowPath both swapped,
+# everything else is an exact copy of nav2_mapping_params.yaml (plus the
+# global_costmap.voxel_layer addition already used by the single-axis
+# nav2_mapping_params_smac_lattice.yaml / nav2_mapping_params_mppi.yaml
+# variants below). See CLAUDE.md's "Nav2 planner/controller comparison"
+# section for the full rationale and test protocol -- this file exists to
+# test the two independently-promising options together rather than only
+# against the NavFn+DWB baseline one axis at a time.
 # Launch with:
-#   ros2 launch bot_bringup mapping.launch.py use_sim:=true nav2_params_file:=nav2_mapping_params_mppi.yaml
+#   ros2 launch bot_bringup mapping.launch.py use_sim:=true nav2_params_file:=nav2_mapping_params_smac_lattice_mppi.yaml
 # ============================================================================
 # Variant of nav2_params.yaml used only by mapping.launch.py (via
 # navigation_launch.py -- amcl/map_server below are unused there and
-# harmless). The one deliberate difference is global_costmap.plugins,
-# documented at that section below; nav2_common's RewrittenYaml can't
-# safely override a list-valued parameter like a plugin list (its
-# converter only handles scalars -- a string substitution there would
-# silently corrupt the parameter's type, the same class of bug as the
+# harmless). The one deliberate difference from a plain copy is
+# global_costmap.plugins, documented at that section below; nav2_common's
+# RewrittenYaml can't safely override a list-valued parameter like a plugin
+# list (its converter only handles scalars -- a string substitution there
+# would silently corrupt the parameter's type, the same class of bug as the
 # 1e-10-parses-as-a-string issue elsewhere in this file), so a small
 # dedicated copy is the safer route rather than a shared file with a
 # broken override. Keep changes to bringup.launch.py's race-day behavior
@@ -118,9 +123,11 @@ controller_server:
       # MPPI, not DWB -- nav2_bringup's own reference config on this Jazzy
       # install defaults to MPPI, a strong signal of current upstream
       # recommendation. Tuning below is that reference config, with
-      # vx_max/vx_min/vy_max deliberately matched to this project's DWB
-      # baseline so this is a controller-only comparison, not also a speed
-      # or reverse-capability comparison.
+      # vx_max/vx_min/vy_max deliberately matched to this project's current
+      # DWB mapping baseline (nav2_mapping_params.yaml, already slowed down
+      # for better scan overlap during exploration) so this is a
+      # controller-only comparison, not also a speed or reverse-capability
+      # comparison.
       plugin: "nav2_mppi_controller::MPPIController"
       time_steps: 56
       model_dt: 0.05
@@ -134,25 +141,25 @@ controller_server:
       ax_min: -3.0
       ay_max: 3.0
       az_max: 3.5
-      # Reverted -- widening these to 0.3/0.6 made behavior worse (live
-      # test), back to nav2_bringup's reference-config values.
+      # Reverted -- see nav2_mapping_params_mppi.yaml's copy of this
+      # comment (widening these made behavior worse in live testing).
       vx_std: 0.2
       vy_std: 0.2
       wz_std: 0.4
-      # Matches nav2_mapping_params.yaml's DWB baseline max_vel_x (synced --
-      # slowed from race-day 0.5 to 0.1 for better scan overlap during mapping).
-      vx_max: 0.6
+      # Matches nav2_mapping_params.yaml's DWB baseline max_vel_x (slowed
+      # from race-day 0.5 to 0.1 for better scan overlap during mapping).
+      vx_max: 0.1
       # Matches DWB baseline (0.0, not upstream's -0.35) -- no blind
       # reverse, same reasoning as SmacPlannerLattice's
       # allow_reverse_expansion: false (no rear-facing perception).
-      vx_min: -0.1
+      vx_min: 0.0
       # Matches DWB baseline -- this robot can't strafe. motion_model:
       # DiffDrive below already forces vy toward 0 internally; set
       # explicitly anyway for clarity.
       vy_max: 0.0
       wz_max: 1.9
-      # Reverted -- raising this to 2 made behavior worse (live test),
-      # back to nav2_bringup's reference-config value.
+      # Reverted -- see nav2_mapping_params_mppi.yaml's copy of this
+      # comment.
       iteration_count: 1
       prune_distance: 1.7
       transform_tolerance: 0.1
@@ -161,7 +168,7 @@ controller_server:
       # Confirmed correct for this robot: skid-steer, no strafe, can
       # rotate in place.
       motion_model: "DiffDrive"
-      visualize: true
+      visualize: false
       regenerate_noises: false
       TrajectoryVisualizer:
         trajectory_step: 5
@@ -186,8 +193,8 @@ controller_server:
         # (default false) rather than direction-biased.
         symmetric_yaw_tolerance: true
       PreferForwardCritic:
-        # Reverted to 5.0 -- lowering this to 3.0 made behavior worse (live
-        # test), back to nav2_bringup's reference-config value.
+        # Reverted -- see nav2_mapping_params_mppi.yaml's copy of this
+        # comment.
         enabled: true
         cost_power: 1
         cost_weight: 5.0
@@ -203,8 +210,8 @@ controller_server:
         near_goal_distance: 1.0
         trajectory_point_step: 2
       PathAlignCritic:
-        # Reverted to 14.0 -- lowering this to 10.0 made behavior worse
-        # (live test), back to nav2_bringup's reference-config value.
+        # Reverted -- see nav2_mapping_params_mppi.yaml's copy of this
+        # comment.
         enabled: true
         cost_power: 1
         cost_weight: 14.0
@@ -376,15 +383,55 @@ planner_server:
     use_sim_time: True
     expected_planner_frequency: 20.0
     planner_plugins: ["GridBased"]
-    # NavFn, not SmacPlannerHybrid -- this robot is skid-steer diff-drive
-    # (can rotate in place), so it doesn't need Reeds-Shepp's non-holonomic
-    # minimum-turning-radius constraints, which were causing "exceeded
-    # maximum iterations" in the tight corridor near the course start.
+    # SmacPlannerLattice, not NavFn/SmacPlannerHybrid -- "diff" motion model
+    # matches this skid-steer robot (includes in-place-rotation primitives,
+    # unlike ackermann; omni is wrong since this robot can't strafe). 0.5m
+    # turning radius is the tighter of the two shipped options for this
+    # ~1.3m corridor -- whether even that fits is exactly what this test is
+    # meant to surface. There is no separate turning-radius YAML override
+    # for this plugin -- it's parsed from lattice_filepath's own metadata
+    # (confirmed via binary inspection); a custom radius would require the
+    # upstream lattice-generator tool, which isn't installed on this
+    # system. (minimum_turning_radius, a real param elsewhere, only applies
+    # to SmacPlannerHybrid, not this plugin.)
     GridBased:
-      plugin: "nav2_navfn_planner::NavfnPlanner"
-      tolerance: 0.25
-      use_astar: true
+      plugin: "nav2_smac_planner::SmacPlannerLattice"
+      lattice_filepath: "/opt/ros/jazzy/share/nav2_smac_planner/sample_primitives/5cm_resolution/0.5m_turning_radius/diff/output.json"
       allow_unknown: true
+      # Matches NavFn baseline's tolerance -- planner-only comparison, not
+      # also a tolerance comparison.
+      tolerance: 0.25
+      # Starting point carried over from this project's earlier (rejected)
+      # SmacPlannerHybrid attempt, which hit "exceeded maximum iterations"
+      # in this same tight corridor at a similar iteration budget. If this
+      # plugin hits the same failure mode, raise this -- not a validated
+      # value.
+      max_iterations: 1000
+      max_on_approach_iterations: 1000
+      max_planning_time: 5.0
+      # analytic_expansion_ratio / analytic_expansion_max_length below are
+      # SearchInfo struct defaults from nav2_smac_planner's types.hpp, not
+      # values from a shipped example config -- reasonable-but-unvalidated
+      # starting points.
+      analytic_expansion_ratio: 3.5
+      analytic_expansion_max_length: 60.0
+      reverse_penalty: 2.0
+      change_penalty: 0.0
+      non_straight_penalty: 1.05
+      rotation_penalty: 5.0
+      cost_penalty: 2.0
+      retrospective_penalty: 0.015
+      cache_obstacle_heuristic: false
+      # False: kept off even though recovery BackUp is now re-enabled (the
+      # 360-degree lidar covers the rear). Planning sustained reverse-driving
+      # segments during normal navigation is a separate, riskier bet than a
+      # short recovery back-up, so the planner still won't expand in reverse.
+      allow_reverse_expansion: false
+      # False -- MPPIController (this file's controller) has no path
+      # smoothing dependency on this flag either way, but leaving it off
+      # keeps smoother_server's SimpleSmoother as the single, consistent
+      # smoothing stage across every variant under test.
+      smooth_path: false
 
 smoother_server:
   ros__parameters:

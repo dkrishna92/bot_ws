@@ -25,7 +25,7 @@ RESULTS_DIR="scripts/nav2_variant_results/$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$RESULTS_DIR"
 
 RACE_VARIANTS=(nav2_params.yaml nav2_params_thetastar.yaml nav2_params_smac_lattice.yaml nav2_params_mppi.yaml)
-MAPPING_VARIANTS=(nav2_mapping_params.yaml nav2_mapping_params_thetastar.yaml nav2_mapping_params_smac_lattice.yaml nav2_mapping_params_mppi.yaml)
+MAPPING_VARIANTS=(nav2_mapping_params.yaml nav2_mapping_params_thetastar.yaml nav2_mapping_params_smac_lattice.yaml nav2_mapping_params_mppi.yaml nav2_mapping_params_smac_lattice_mppi.yaml)
 
 if [ "${1:-}" = "--all" ]; then
     if [ "$MODE" = "race" ]; then VARIANTS=("${RACE_VARIANTS[@]}"); else VARIANTS=("${MAPPING_VARIANTS[@]}"); fi

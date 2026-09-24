@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Kills every ROS 2 / Gazebo process left over from a previous `ros2 launch`
 # run (gz sim, nav2 servers, slam_toolbox, EKF, RViz, the ros2 daemon, stale
-# Fast DDS shared-memory files), then verifies they actually exited before
-# reporting success.
+# Fast DDS shared-memory files, leftover core dump files), then verifies
+# they actually exited before reporting success.
 #
 # Run this before starting a new bringup/mapping launch. A straggler
 # process from a prior run (especially after Ctrl-C, a killed terminal, or
@@ -59,6 +59,21 @@ ros2 daemon stop >/dev/null 2>&1 || true
 
 echo "Clearing stale Fast DDS shared-memory files (left behind by any process that didn't exit cleanly)..."
 rm -f /dev/shm/fastrtps_* /dev/shm/sem.fastrtps_* 2>/dev/null || true
+
+# A SIGKILL/SIGSEGV crash (gz sim, a nav2 server, etc.) can dump a core file
+# into whatever was the process's cwd -- normally this workspace root, since
+# that's where `ros2 launch` is run from. Left in place, a multi-GB core
+# file silently eats disk space and is easy to miss since it isn't reported
+# by any of the checks above (the crashed process itself is already gone).
+WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+echo "Clearing core dump files in $WORKSPACE_ROOT..."
+core_files="$(find "$WORKSPACE_ROOT" -maxdepth 1 -type f \( -name 'core' -o -name 'core.[0-9]*' \) 2>/dev/null)"
+if [ -n "$core_files" ]; then
+    echo "$core_files" | while IFS= read -r f; do echo "  removing $f"; done
+    echo "$core_files" | xargs -r rm -f
+else
+    echo "None found."
+fi
 
 echo "Verifying..."
 remaining="$(list_pids)"

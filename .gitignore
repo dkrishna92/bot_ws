@@ -15,6 +15,11 @@ log/
 *.log
 core.*
 *.txt
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.gv
 
 # Per-run local output from scripts/run_nav2_variant_test.sh -- not
 # something to commit, see CLAUDE.md's Nav2 planner/controller comparison
