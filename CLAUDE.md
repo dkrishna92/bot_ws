@@ -28,10 +28,20 @@ Hard constraints from the rules doc:
 - Compute: Raspberry Pi 5, Ubuntu Server 24.04 LTS (arm64), native install —
   NOT Raspberry Pi OS, NOT Docker. Confirmed officially supported starting
   with 24.04.
-- Lidar: RPLIDAR (exact model TBD — "RP32" reference unconfirmed against a
-  real Slamtec model name; confirm before locking serial baudrate config)
+- Lidar: RPLIDAR S2 (identified 2026-09-25 on the Pi: answers only at
+  1 Mbaud, DenseBoost mode = 32 kHz sample rate / 10 Hz / 30 m — the old
+  "RP32" reference was the 32K sample rate). Driver is Slamtec's
+  `sllidar_ros2` built from source into `src/` (gitignored, fetched at a
+  pinned commit by `scripts/setup_pi.sh`) — the apt `rplidar_ros` 2.1.0
+  (SDK 1.12) segfaults on scan start with this unit in every scan mode.
 - Camera: OAK-D S2 (Luxonis / DepthAI) — inference and stereo depth run
-  on-device; host only receives detections + depth, never raw frames
+  on-device; host only receives detections + depth, never raw frames.
+  Mounted below the lidar: housing bottom measured 9 cm above ground
+  (2026-09-25), so `camera_link` (housing centre) is at z = 0.104 m in
+  `bot.urdf.xacro`; its x offset is still the original estimate. The
+  URDF's lidar height (0.1143 m, a "planned" figure) is likely too low —
+  the real lidar's beam clears the camera top (~11.8 cm) with no
+  self-returns under 0.32 m — measure and update it.
 - Motor driver: Pololu Dual G2 High-Power Motor Driver 18v18 — PWM + DIR +
   SLEEP digital I/O, NO serial/I2C interface (this was a corrected mistake
   early on — don't reintroduce a serial-protocol assumption for this board)
@@ -65,8 +75,13 @@ Hard constraints from the rules doc:
 - IMU: Bosch BNO055 — 9-DOF (accel + gyro + magnetometer) with onboard
   sensor fusion; outputs an absolute, magnetically-referenced orientation
   directly from the chip, not just raw gyro. Interface decided (2026-09-20):
-  I2C, on the Pi 5's hardware I2C1 bus (GPIO2/SDA1, GPIO3/SCL1 — header
-  pins 3/5). Real driver node now exists: `bot_imu`'s bno055_node (NDOF
+  I2C. **Moved to I2C3 on GPIO22/23 (header pins 15/16) on 2026-09-25**:
+  on the race Pi, I2C1 (GPIO2/3, pins 3/5) logs "controller timed out"
+  even with nothing attached, so don't move it back. Needs
+  `dtoverlay=i2c3-pi5,pins_22_23` in `/boot/firmware/config.txt`
+  (`setup_pi.sh` adds it); `hardware.launch.py`'s `imu_i2c_bus` arg
+  (default 3) selects the bus. Verified on hardware 2026-09-25: chip ID
+  0xA0 at 0x28, `/imu` at 50 Hz, ~9.4 m/s² on +z at rest. Real driver node now exists: `bot_imu`'s bno055_node (NDOF
   fusion mode, smbus2). Mounting location still not decided. Fused into
   `robot_localization`'s EKF for yaw/yaw-rate only (see
   `bot_bringup/config/ekf_params.yaml`) — wheel odometry keeps
@@ -167,7 +182,13 @@ Two independent layers:
    a Feather board reading a physical kill-switch input pin and reporting
    status continuously over its own paired LoRa module. See
    `arduino_ws/src/main.cpp` and `feather_ws/src/main.cpp` for the shared
-   serial protocol and each side's logic. (Notes: an earlier version of this doc
+   serial protocol and each side's logic. (Correction 2026-09-25: the
+   e-stop MCU is actually an ESP32 module, not an Arduino Nano -- "Nano"
+   elsewhere in this doc means this board. The ESP32 has onboard
+   Bluetooth/WiFi; any radio link to the Pi must stay status-only and
+   never able to command the relay, or it breaks the isolation above.
+   `arduino_ws` isn't on the racebot Pi, so which PlatformIO board target
+   the firmware builds for is unverified.) (Notes: an earlier version of this doc
    assumed this role would be a Teensy — corrected 2026-09-20. The Teensy
    is now dedicated to wheel encoder reporting instead, see Hardware above
    and `bot_odometry`. An earlier version of this doc and of
@@ -201,7 +222,6 @@ Laptop-first, Pi 5 for final integration:
 
 ## Open items / things not yet resolved
 
-- Exact RPLIDAR model and baudrate
 - Course layout / obstacle geometry: official SharePoint resources still
   inaccessible, but a teammate (D Turner) imported CFR speed/obstacle course
   geometry into Gazebo world files (`bot_gazebo/worlds/*_cfr.world`) from
@@ -209,17 +229,6 @@ Laptop-first, Pi 5 for final integration:
 - Perception sensor spec confirmation (camera-only CV vs added depth/LiDAR
   for obstacle detection) — pending official course documentation
 - E-stop Arduino Nano firmware (`arduino_ws`) is written (fail-safe deadman
-<<<<<<< Updated upstream
-  logic against a wireless receiver module's heartbeat) but untested on
-  real hardware; `RELAY_PIN`, relay active-high/low polarity, and the
-  receiver module's actual serial framing/baud are still placeholders
-- Wheel encoder Teensy pin assignment TBD — real hardware not yet in hand;
-  the Teensy firmware in `teensy_ws` is written against a placeholder pin
-  assignment. Part number/CPR is no longer a placeholder — confirmed
-  2026-09-24 as Pololu #4843 (979.62 CPR at the gearbox output shaft);
-  `bot_odometry`'s wheel_odom_node's `ticks_per_rev` default is updated to
-  match (was a 1200 placeholder).
-=======
   logic against a heartbeat received over a UART LoRa module) but untested
   on real hardware; `RELAY_PIN`, relay active-high/low polarity, and the
   LoRa module's actual baud rate are still placeholders
@@ -231,11 +240,12 @@ Laptop-first, Pi 5 for final integration:
   AT-command setup (e.g. Ebyte E32 in Normal mode) — if the actual module
   is command-based (e.g. REYAX RYLR) instead, both this firmware and the
   Nano's need an AT-command init sequence added
-- Wheel encoder part number/CPR and Teensy pin assignment TBD — real
-  hardware not yet in hand; `bot_odometry`'s wheel_odom_node and the Teensy
-  firmware in `teensy_ws` are written against placeholder values
-  (ticks_per_rev=1200) that need updating once encoders are chosen
->>>>>>> Stashed changes
+- Wheel encoder Teensy pin assignment TBD — real hardware not yet in hand;
+  the Teensy firmware in `teensy_ws` is written against a placeholder pin
+  assignment. Part number/CPR is no longer a placeholder — confirmed
+  2026-09-24 as Pololu #4843 (979.62 CPR at the gearbox output shaft);
+  `bot_odometry`'s wheel_odom_node's `ticks_per_rev` default is updated to
+  match (was a 1200 placeholder).
 - Nav2 params: `robot_radius` now matches `bot.urdf.xacro`'s real footprint
   and the map-then-race launch wiring (mapping.launch.py / bringup.launch.py)
   is in place; costmap inflation and controller gains are being addressed
@@ -458,3 +468,38 @@ Four related hardware-integration pieces landed together:
   over giving the Teensy a second virtual serial port, for simplicity
   (one USB cable, one node). Trigger/echo pin assignment is still a
   placeholder (see Open items).
+
+## Pi 5 race deployment (2026-09-25)
+
+- **GPIO library is `lgpio`, not pigpio/RPi.GPIO.** pigpio doesn't support
+  the Pi 5's RP1 I/O chip and has no Ubuntu 24.04 arm64 package; RPi.GPIO
+  doesn't work on the Pi 5 either. `motor_node` and `watchdog_node` both
+  use lgpio against `gpiochip4` (RP1 header GPIO on Ubuntu's 6.8 raspi
+  kernel; `gpio_chip` param if that ever changes). lgpio PWM is
+  software-timed, capped at 10 kHz — RP1 hardware PWM on GPIO12/13 via
+  sysfs is the upgrade path if motor jitter shows up under Nav2 CPU load.
+  Both nodes take a `dry_run` param (used by their unit tests).
+- **`bot_bringup/launch/hardware.launch.py`** is the real-hardware layer
+  (robot_state_publisher from `bot.urdf.xacro`, RPLIDAR, OAK-D + depth
+  point cloud, motor/watchdog/wheel_odom/bno055 nodes), included by both
+  `bringup.launch.py` and `mapping.launch.py` unless `use_sim:=true`.
+  Before this, every Pi-only node was commented out of the race launch
+  and nothing published the URDF's static TF on hardware.
+- **`scripts/setup_pi.sh`** (run with sudo) installs the ROS 2 Jazzy
+  runtime + Nav2/SLAM/driver packages (no Gazebo/RViz — Pi is headless),
+  adds udev rules (`/dev/rplidar`, `/dev/teensy` symlinks, OAK-D USB
+  permissions), adds the user to `dialout`, and builds the workspace.
+  **`scripts/check_hardware.sh`** is the race-morning preflight
+  (`--topics` also checks data flow while bringup is running).
+- **Launch-config leak:** depthai's `camera.launch.py` sets launch configs
+  (`use_composition='true'`, `name`, `namespace`) that leak into later
+  includes; nav2_bringup then evals `not true` and the whole launch dies
+  with "name 'true' is not defined". `hardware.launch.py` wraps the OAK-D
+  include in a scoped `GroupAction` — keep it that way. A launch that
+  crashes this way also leaves orphaned node processes (still holding
+  GPIO/serial) — `scripts/clean_robot.sh` (run before every launch on the
+  Pi) stops this workspace's nodes, the lidar driver, and any process
+  holding a sensor device (via `fuser`), SIGINT first so motor_node's
+  shutdown runs, drives the motor pins low, then runs `clean_sim.sh` (the
+  general, device-agnostic ROS/Gazebo cleanup used on the laptop too). Launches with an RViz node skip it when `rviz2` isn't
+  installed rather than crashing midway, for the same reason.

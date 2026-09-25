@@ -12,9 +12,14 @@ cycle + direction for a differential drivetrain -- replace the mixing in
 cmd_vel_callback() if the final drivetrain is Ackermann + separate steering
 servo instead.
 
-pigpio (not RPi.GPIO) is used for hardware-timed PWM -- lower jitter than
-software PWM, worth it for smooth low-speed control. Requires `pigpiod`
-running on the Pi (`sudo systemctl enable --now pigpiod`).
+lgpio is used for GPIO/PWM -- pigpio (used by the earlier prototype) does
+not support the Pi 5's RP1 I/O chip and isn't packaged for Ubuntu 24.04
+arm64, and RPi.GPIO doesn't work on the Pi 5 either. lgpio's PWM is
+software-timed and capped at 10 kHz (pwm_frequency_hz is clamped to that);
+fine for the G2 driver, but RP1 hardware PWM on GPIO12/13 via sysfs is the
+upgrade path if jitter ever shows up under load. No daemon needed, but the
+user must be in the gpio/dialout group for /dev/gpiochip* access (see
+scripts/setup_pi.sh).
 
 Enforces a short cmd_vel timeout as a second layer of defense alongside the
 MCU-based hard e-stop (see CLAUDE.md safety section) -- NOT a substitute
@@ -30,16 +35,22 @@ from geometry_msgs.msg import Twist
 from std_msgs.msg import Bool
 
 try:
-    import pigpio
+    import lgpio
 except ImportError:
-    pigpio = None  # allows this module to be imported on non-Pi dev machines
+    lgpio = None  # allows this module to be imported on non-Pi dev machines
+
+LGPIO_MAX_PWM_HZ = 10000
 
 
 class MotorNode(Node):
-    def __init__(self):
-        super().__init__("motor_node")
+    def __init__(self, **kwargs):
+        super().__init__("motor_node", **kwargs)
 
-        self.declare_parameter("pwm_frequency_hz", 20000)
+        self.declare_parameter("dry_run", False)
+        # RP1 header GPIO is gpiochip4 on Ubuntu's 6.8 raspi kernel (gpiochip0
+        # on newer Raspberry Pi OS kernels) -- check `gpioinfo` if pins don't move.
+        self.declare_parameter("gpio_chip", 4)
+        self.declare_parameter("pwm_frequency_hz", 10000)
         self.declare_parameter("max_duty_cycle", 0.9)
         self.declare_parameter("cmd_vel_timeout_s", 0.3)
         self.declare_parameter("track_width_m", 0.32)
@@ -51,7 +62,7 @@ class MotorNode(Node):
         self.declare_parameter("channel_b_dir_pin", 16)
         self.declare_parameter("channel_b_sleep_pin", 19)
 
-        self._freq = self.get_parameter("pwm_frequency_hz").value
+        self._freq = min(self.get_parameter("pwm_frequency_hz").value, LGPIO_MAX_PWM_HZ)
         self._max_duty = self.get_parameter("max_duty_cycle").value
         self._timeout_s = self.get_parameter("cmd_vel_timeout_s").value
         self._track_width = self.get_parameter("track_width_m").value
@@ -72,21 +83,26 @@ class MotorNode(Node):
         self._last_cmd_time = 0.0
         self._fault = False
 
-        self._pi = None
-        if pigpio is not None:
-            self._pi = pigpio.pi()
-            if not self._pi.connected:
-                self.get_logger().error("could not connect to pigpiod -- is it running?")
-                self._pi = None
-            else:
-                for chan in (self._chan_a, self._chan_b):
-                    self._pi.set_mode(chan["dir"], pigpio.OUTPUT)
-                    self._pi.set_mode(chan["sleep"], pigpio.OUTPUT)
-                    self._pi.set_PWM_frequency(chan["pwm"], self._freq)
-                    self._pi.write(chan["sleep"], 1)  # wake
-        else:
-            self.get_logger().warn("pigpio not available -- running in dry-run mode "
+        self._h = None
+        if self.get_parameter("dry_run").value:
+            self.get_logger().warn("dry_run set -- no hardware output")
+        elif lgpio is None:
+            self.get_logger().warn("lgpio not available -- running in dry-run mode "
                                     "(no hardware output). Expected on a non-Pi dev machine.")
+        else:
+            chip = self.get_parameter("gpio_chip").value
+            try:
+                self._h = lgpio.gpiochip_open(chip)
+                for chan in (self._chan_a, self._chan_b):
+                    lgpio.gpio_claim_output(self._h, chan["dir"], 0)
+                    lgpio.gpio_claim_output(self._h, chan["pwm"], 0)
+                    lgpio.gpio_claim_output(self._h, chan["sleep"], 1)  # wake
+            except lgpio.error as e:
+                self.get_logger().error(f"could not open/claim gpiochip{chip}: {e} -- "
+                                        "no hardware output (check gpio_chip and group membership)")
+                if self._h is not None:
+                    lgpio.gpiochip_close(self._h)
+                self._h = None
 
         self.create_subscription(Twist, "cmd_vel", self._on_cmd_vel, 10)
         self.create_subscription(Bool, "system_fault", self._on_fault, 10)
@@ -103,10 +119,15 @@ class MotorNode(Node):
 
     def _set_channel(self, chan: dict, duty: float) -> None:
         duty = max(-self._max_duty, min(self._max_duty, duty))
-        if self._pi is None:
+        if self._h is None:
             return
-        self._pi.write(chan["dir"], 1 if duty >= 0 else 0)
-        self._pi.set_PWM_dutycycle(chan["pwm"], int(abs(duty) * 255))
+        # _tick runs at 50 Hz; re-issuing tx_pwm restarts the software PWM
+        # waveform, so only touch the pins when the command actually changes.
+        if chan.get("last_duty") == duty:
+            return
+        chan["last_duty"] = duty
+        lgpio.gpio_write(self._h, chan["dir"], 1 if duty >= 0 else 0)
+        lgpio.tx_pwm(self._h, chan["pwm"], self._freq, abs(duty) * 100.0)
 
     def _stop_all(self) -> None:
         self._set_channel(self._chan_a, 0.0)
@@ -128,10 +149,11 @@ class MotorNode(Node):
 
     def destroy_node(self) -> None:
         self._stop_all()
-        if self._pi is not None:
+        if self._h is not None:
             for chan in (self._chan_a, self._chan_b):
-                self._pi.write(chan["sleep"], 0)
-            self._pi.stop()
+                lgpio.gpio_write(self._h, chan["sleep"], 0)
+            lgpio.gpiochip_close(self._h)
+            self._h = None
         super().destroy_node()
 
 

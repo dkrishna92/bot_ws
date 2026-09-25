@@ -10,10 +10,9 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
-  <!-- pigpio (hardware-timed PWM) has no standard rosdep key: apt install
-       python3-pigpio and enable the pigpiod service on the Pi (see
-       motor_node.py docstring for the exact command). Not required on dev
-       machines; motor_node runs in dry-run mode without it. -->
+  <!-- lgpio: apt install python3-lgpio on the Pi (scripts/setup_pi.sh does
+       this). Not required on dev machines; motor_node runs in dry-run mode
+       without it. -->
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
