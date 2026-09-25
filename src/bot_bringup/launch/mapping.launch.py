@@ -278,6 +278,7 @@ def generate_launch_description():
             parameters=[{
                 'use_sim_time': LaunchConfiguration('use_sim'),
                 'save_map_name': LaunchConfiguration('map_save_path'),
+                'heading_turn_penalty': 3.0,
             }],
         ),
 

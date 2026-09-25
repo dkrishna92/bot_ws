@@ -159,39 +159,29 @@ Or launch a single variant manually with
 (swap `bringup.launch.py` for `mapping.launch.py` and the `nav2_params_`
 prefix for `nav2_mapping_params_` for the mapping-side variants).
 
-## Vision-based start signal and lap navigation
+## Vision-based start signal
 
 The competition requires an autonomous, vision-triggered race start (a
-manual trigger costs a 5s time penalty), and the speed/obstacle courses
-are multi-lap (3 laps / 2 laps respectively). Two nodes split this:
+manual trigger costs a 5s time penalty). `bot_perception`'s
+`start_trigger_node` watches the OAK-D's RGB feed for the course's start
+signal flipping from red to green (debounced over a few consecutive
+frames to reject a flicker/false read), then sends Nav2 a
+`NavigateToPose` goal directly to get the robot moving.
 
-- **`bot_perception`'s `start_trigger_node`** watches the OAK-D's RGB feed
-  for the course's start signal flipping from red to green (debounced
-  over a few consecutive frames to reject a flicker/false read), then
-  publishes a latched `start_signal` Bool. It only handles detection.
-  - **Real hardware**: subscribes to `/oak/rgb/image_raw` (the node's
-    default `image_topic`).
-  - **Sim**: subscribes to `/camera/image_raw` (`bot_gazebo`'s simulated
-    camera) — `bringup.launch.py` picks the right topic automatically
-    based on `use_sim`.
-- **`bot_navigation`'s `lap_navigator_node`** subscribes to `start_signal`
-  and, once it fires, sends Nav2 a single `NavigateThroughPoses` goal:
-  a small set of coarse per-lap checkpoints (see
-  `lap_navigator_node.py`'s `_COURSE_CHECKPOINTS`) repeated for the
-  course's lap count, letting Nav2's own global planner fill in the
-  actual route against the live costmap rather than following a
-  hand-traced path.
-  - `course` (`speed_course_cfr` or `obstacle_course_cfr`) and
-    `num_laps` (`0` = use the course's own default) are launch args.
-  - **The checkpoint positions are a best-effort derivation from the
-    imported CAD world geometry, not verified against the real course**
-    (see CLAUDE.md's open items — official course geometry is still
-    inaccessible). Eyeball/adjust them in the Gazebo GUI before trusting
-    this on race day.
+- **Real hardware**: subscribes to `/oak/rgb/image_raw` (the node's
+  default `image_topic`).
+- **Sim**: subscribes to `/camera/image_raw` (`bot_gazebo`'s simulated
+  camera) — `bringup.launch.py` picks the right topic automatically based
+  on `use_sim`.
+- **Goal pose**: pass `goal_x`, `goal_y`, `goal_yaw` (radians, `map`
+  frame) to `bringup.launch.py`. No real course waypoints exist yet, so
+  these default to NaN — if left unset, the node still detects/latches
+  the signal but logs an error and skips sending a goal rather than
+  driving toward an undefined point.
 
 ```bash
 ros2 launch bot_bringup bringup.launch.py use_sim:=true \
-  course:=obstacle_course_cfr num_laps:=2
+  goal_x:=14.0 goal_y:=4.75 goal_yaw:=3.14159265
 ```
 
 ### Simulating the start signal in Gazebo

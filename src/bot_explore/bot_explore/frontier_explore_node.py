@@ -317,7 +317,9 @@ class FrontierExploreNode(Node):
             goal_pose.header.stamp = self.get_clock().now().to_msg()
             goal_pose.pose.position.x = goal[0]
             goal_pose.pose.position.y = goal[1]
-            goal_pose.pose.orientation.w = 1.0
+            goal_yaw = math.atan2(goal[1] - pose[1], goal[0] - pose[0])
+            goal_pose.pose.orientation.z = math.sin(goal_yaw / 2.0)
+            goal_pose.pose.orientation.w = math.cos(goal_yaw / 2.0)
             self.get_logger().info(f"Heading to frontier at ({goal[0]:.2f}, {goal[1]:.2f})")
             self._nav.goToPose(goal_pose)
 
