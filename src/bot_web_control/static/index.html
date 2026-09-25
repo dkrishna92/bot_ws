@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bot Control</title>
+<style>
+  body { font-family: sans-serif; background: #1e1e1e; color: #eee; margin: 0; padding: 1rem; }
+  h1 { font-size: 1.2rem; margin: 0 0 0.75rem; }
+  .row { display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-start; }
+  .panel { background: #2a2a2a; border-radius: 8px; padding: 1rem; }
+  button { background: #3a3a3a; color: #eee; border: 1px solid #555; border-radius: 6px;
+           padding: 0.5rem 1rem; font-size: 1rem; cursor: pointer; margin: 0.15rem; }
+  button:hover { background: #4a4a4a; }
+  button.danger { border-color: #a33; }
+  button.danger:hover { background: #522; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  #status { font-size: 0.9rem; color: #9c9; margin-bottom: 0.5rem; }
+  #mapImg { max-width: 480px; border: 1px solid #555; background: #000; image-rendering: pixelated; }
+  .dpad { display: grid; grid-template-columns: 60px 60px 60px; grid-template-rows: 60px 60px;
+          gap: 4px; margin-top: 0.5rem; }
+  .dpad button { width: 60px; height: 60px; font-size: 1.4rem; margin: 0; }
+  label { display: block; font-size: 0.85rem; margin-top: 0.5rem; }
+  input[type=range] { width: 200px; }
+</style>
+</head>
+<body>
+  <h1>Bot Control</h1>
+  <div id="status">status: loading...</div>
+
+  <div class="row">
+    <div class="panel">
+      <div><button id="btnStart">Start (bringup)</button></div>
+      <div><button id="btnMapping">Mapping Run (teleop)</button></div>
+      <div><button id="btnStop" class="danger">Stop</button></div>
+      <div><button id="btnSaveMap">Save Map (checkpoint)</button></div>
+      <div style="margin-top:0.5rem;">
+        <label><input type="checkbox" id="resumeCheck"> Resume from checkpoint on next Mapping Run</label>
+      </div>
+      <div>Initial pose (must match the robot's actual pose in the checkpoint map -- see <code>tf2_echo map base_link</code>):</div>
+      <label>x <input type="number" id="poseX" value="0.0" step="0.1" style="width:5rem;"></label>
+      <label>y <input type="number" id="poseY" value="0.0" step="0.1" style="width:5rem;"></label>
+      <label>yaw (rad) <input type="number" id="poseYaw" value="0.0" step="0.1" style="width:5rem;"></label>
+    </div>
+
+    <div class="panel">
+      <div>Teleop -- WASD or buttons (w/s forward/back, a/d rotate)</div>
+      <div class="dpad">
+        <div></div><button id="btnFwd">&#9650;</button><div></div>
+        <button id="btnLeft">&#9664;</button><button id="btnBack">&#9660;</button><button id="btnRight">&#9654;</button>
+      </div>
+      <label>linear speed: <span id="linVal"></span> m/s
+        <input type="range" id="linSpeed" min="0.05" max="1.0" step="0.05">
+      </label>
+      <label>angular speed: <span id="angVal"></span> rad/s
+        <input type="range" id="angSpeed" min="0.1" max="3.0" step="0.1">
+      </label>
+    </div>
+
+    <div class="panel">
+      <div>Map</div>
+      <img id="mapImg" src="/api/map.png">
+    </div>
+  </div>
+
+<script>
+let linSpeed = 0.3, angSpeed = 1.0;
+const linInput = document.getElementById('linSpeed');
+const angInput = document.getElementById('angSpeed');
+const linVal = document.getElementById('linVal');
+const angVal = document.getElementById('angVal');
+
+function refreshSpeedLabels() {
+  linVal.textContent = Number(linInput.value).toFixed(2);
+  angVal.textContent = Number(angInput.value).toFixed(2);
+}
+linInput.addEventListener('input', () => { linSpeed = Number(linInput.value); refreshSpeedLabels(); });
+angInput.addEventListener('input', () => { angSpeed = Number(angInput.value); refreshSpeedLabels(); });
+
+const held = new Set();
+function currentCmd() {
+  let lin = 0, ang = 0;
+  if (held.has('w')) lin += 1;
+  if (held.has('s')) lin -= 1;
+  if (held.has('a')) ang += 1;
+  if (held.has('d')) ang -= 1;
+  return { linear: lin, angular: ang };
+}
+function sendCmd() {
+  const c = currentCmd();
+  fetch('/api/cmd_vel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(c)
+  });
+}
+let teleopInterval = null;
+function startTeleopLoop() {
+  if (teleopInterval) return;
+  teleopInterval = setInterval(sendCmd, 100);
+  sendCmd();
+}
+function maybeStopTeleopLoop() {
+  if (held.size === 0 && teleopInterval) {
+    clearInterval(teleopInterval);
+    teleopInterval = null;
+    sendCmd(); // final zero
+  }
+}
+
+const KEY_MAP = { 'w': 'w', 'a': 'a', 's': 's', 'd': 'd' };
+window.addEventListener('keydown', (e) => {
+  const k = KEY_MAP[e.key.toLowerCase()];
+  if (!k) return;
+  held.add(k);
+  startTeleopLoop();
+});
+window.addEventListener('keyup', (e) => {
+  const k = KEY_MAP[e.key.toLowerCase()];
+  if (!k) return;
+  held.delete(k);
+  maybeStopTeleopLoop();
+});
+// Lose focus (tab switch, etc.) -- don't leave a key stuck "held".
+window.addEventListener('blur', () => { held.clear(); maybeStopTeleopLoop(); });
+
+// On-screen buttons: press-and-hold semantics matching the keyboard.
+function bindHoldButton(id, key) {
+  const el = document.getElementById(id);
+  const press = (ev) => { ev.preventDefault(); held.add(key); startTeleopLoop(); };
+  const release = (ev) => { ev.preventDefault(); held.delete(key); maybeStopTeleopLoop(); };
+  el.addEventListener('mousedown', press);
+  el.addEventListener('mouseup', release);
+  el.addEventListener('mouseleave', release);
+  el.addEventListener('touchstart', press);
+  el.addEventListener('touchend', release);
+}
+bindHoldButton('btnFwd', 'w');
+bindHoldButton('btnBack', 's');
+bindHoldButton('btnLeft', 'a');
+bindHoldButton('btnRight', 'd');
+
+// Start / Stop / Mapping Run / Save Map.
+document.getElementById('btnStart').addEventListener('click', () => fetch('/api/launch/bringup', { method: 'POST' }));
+document.getElementById('btnMapping').addEventListener('click', () => {
+  const resume = document.getElementById('resumeCheck').checked;
+  const pose = [
+    document.getElementById('poseX').value,
+    document.getElementById('poseY').value,
+    document.getElementById('poseYaw').value,
+  ].join(',');
+  fetch('/api/launch/mapping', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ resume: resume, pose: pose })
+  });
+});
+document.getElementById('btnStop').addEventListener('click', () => fetch('/api/stop', { method: 'POST' }));
+document.getElementById('btnSaveMap').addEventListener('click', () => {
+  fetch('/api/save_map', { method: 'POST' })
+    .then(r => r.json())
+    .then(s => alert(s.message));
+});
+
+// Status + speed defaults from the server, and periodic map refresh.
+let speedsInitialized = false;
+function refreshStatus() {
+  fetch('/api/status').then(r => r.json()).then(s => {
+    document.getElementById('status').textContent =
+      'status: ' + (s.running ? ('running: ' + s.running) : 'idle') +
+      (s.map_available ? ' | map available' : ' | no map yet');
+    if (!speedsInitialized) {
+      speedsInitialized = true;
+      linInput.value = s.linear_speed; angInput.value = s.angular_speed;
+      linSpeed = s.linear_speed; angSpeed = s.angular_speed;
+      refreshSpeedLabels();
+    }
+  }).catch(() => {});
+}
+refreshStatus();
+setInterval(refreshStatus, 1000);
+setInterval(() => { document.getElementById('mapImg').src = '/api/map.png?t=' + Date.now(); }, 2000);
+</script>
+</body>
+</html>

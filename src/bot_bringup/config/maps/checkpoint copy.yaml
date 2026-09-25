@@ -1,7 +1,7 @@
-image: map.pgm
+image: checkpoint.pgm
 mode: trinary
 resolution: 0.050
-origin: [-20.611, -2.967, 0]
+origin: [-11.714, -0.565, 0]
 negate: 0
 occupied_thresh: 0.65
 free_thresh: 0.196
