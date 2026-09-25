@@ -112,6 +112,21 @@ controller_server:
     controller_frequency: 20.0
     min_x_velocity_threshold: 0.001
     min_theta_velocity_threshold: 0.001
+    # Not configured before -- controller_server fell back to its own
+    # hardcoded SimpleProgressChecker defaults (0.5m movement required
+    # within a 10s rolling window). At the turn, MPPI's compute cost drove
+    # controller_frequency down to 4.57Hz (logged), so 10s of wall-clock
+    # time bought far fewer actual control iterations than normal -- not
+    # enough to cover 0.5m, tripping "Failed to make progress" and
+    # aborting even though the robot was still making genuine (just slow)
+    # progress. More patience here buys margin against exactly that,
+    # independent of the batch_size cut below which addresses the root
+    # compute-cost cause.
+    progress_checker_plugin: "progress_checker"
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.3
+      movement_time_allowance: 20.0
     controller_plugins: ["FollowPath"]
 
     FollowPath:
@@ -126,10 +141,12 @@ controller_server:
       model_dt: 0.05
       # Biggest compute lever for the eventual Pi 5 deployment -- flag as
       # the first thing to reduce (e.g. 1000/500) if it can't hold
-      # controller_frequency: 20.0 on-device. Not a concern for this
-      # round's laptop/Gazebo testing (confirmed single-threaded, no
-      # OpenMP/TBB linked -- relies on xtensor/SIMD, not multi-core).
-      batch_size: 2000
+      # controller_frequency: 20.0 on-device. That predicted risk showed up
+      # early: even on the dev laptop, controller_frequency dropped to
+      # 4.57Hz at a tight turn (logged "Failed to make progress" abort),
+      # so cut to 1000 here rather than waiting for the Pi 5 to hit the
+      # same wall.
+      batch_size: 1000
       ax_max: 3.0
       ax_min: -3.0
       ay_max: 3.0

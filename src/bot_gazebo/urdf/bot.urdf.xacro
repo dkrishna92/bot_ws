@@ -2,21 +2,21 @@
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="bot">
 
   <!-- Constants -->
-  <xacro:property name="base_length" value="0.45"/>  <!-- 17.7 inches -->
-  <xacro:property name="base_width" value="0.27"/>   <!-- 10.6inches -->
-  <xacro:property name="base_height" value="0.176"/>  <!-- chassis height -->
-  <!-- Gap between the ground and the underside of the chassis. Without it
-       the chassis box was modelled spanning z=0..base_height, i.e. sitting
-       flat on the floor rather than riding on the wheels. That is wrong on
-       its own terms, though it was not what blocked turning: see the wheel
-       friction block below for that. -->
+  <xacro:property name="base_length" value="0.445"/>  <!-- 0.445 m = 17.5 in -->
+  <xacro:property name="base_width" value="0.255"/>   <!-- 0.255 m = 10.0 in -->
+  <xacro:property name="base_height" value="0.176"/>  <!-- chassis height, 0.176 m = 6.9 in -->
+  <!-- Gap between the ground and the underside of the chassis (0.06 m =
+       2.4 in). Without it the chassis box was modelled spanning
+       z=0..base_height, i.e. sitting flat on the floor rather than riding
+       on the wheels. That is wrong on its own terms, though it was not
+       what blocked turning: see the wheel friction block below for that. -->
   <xacro:property name="ground_clearance" value="0.06"/>
-  <xacro:property name="wheel_radius" value="0.12"/>  <!-- wheel radius -->
-  <xacro:property name="wheel_width" value="0.06"/>  <!-- wheel width -->
-  <xacro:property name="wheelbase" value="0.33"/>    <!-- distance between wheels -->
-  <xacro:property name="track_width" value="0.22"/>  <!-- width between wheel centers -->
-  <xacro:property name="mass_base" value="3.2"/>    <!-- 7 lbs  -->
-  <xacro:property name="mass_wheel" value="0.2"/>
+  <xacro:property name="wheel_radius" value="0.06"/>  <!-- 0.06 m = 2.4 in radius (4.7 in dia) -->
+  <xacro:property name="wheel_width" value="0.06"/>  <!-- 0.06 m = 2.4 in -->
+  <xacro:property name="wheelbase" value="0.33"/>    <!-- front-to-rear axle spacing, 0.33 m = 13.0 in -->
+  <xacro:property name="track_width" value="0.32"/>  <!-- left-to-right wheel-centre spacing, 0.32 m = 12.6 in -->
+  <xacro:property name="mass_base" value="3.2"/>    <!-- 3.2 kg = 7.0 lb -->
+  <xacro:property name="mass_wheel" value="0.2"/>   <!-- 0.2 kg = 0.44 lb each -->
 
   <!-- Base Link (Chassis) -->
   <link name="base_link">
@@ -199,9 +199,14 @@
 
   <!-- Lidar Joint -->
   <joint name="lidar_joint" type="fixed">
-    <!-- +0.12 (was +0.06): puts the scan plane at ~0.296m, clear of the
-         wheel tops (~0.24m) so the lidar can't graze its own wheels. -->
-    <origin xyz="0 0 ${base_height + 0.12}" rpy="0 0 0"/>
+    <!-- 0.1143m = 4.5in above the ground, matching the RPLIDAR's planned
+         mount height on the real robot. base_link's origin is at ground
+         level (wheels are radius 0.12 centred at z=0.12, so they touch the
+         floor), so this z IS the height above ground directly. Mounting
+         this low is safe despite the 360-degree scan: the wheels (~0.11m
+         out) and chassis body are both inside the sensor's 0.3m
+         <range><min> dead zone, so they never produce self-returns. -->
+    <origin xyz="0 0 0.1143" rpy="0 0 0"/>
     <parent link="base_link"/>
     <child link="lidar_link"/>
   </joint>
