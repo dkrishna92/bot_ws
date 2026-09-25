@@ -37,8 +37,11 @@ GPIO_CHIP=gpiochip4
 MOTOR_PINS="12 13 5 16 6 19"
 
 list_pids() {
+    # bot_web_control is excluded: its dashboard runs this script from its
+    # own Stop button, and would otherwise match "ros2 launch" / install/
+    # and kill itself.
     # grep -v grep: the pipeline's own grep would otherwise match itself.
-    ps aux | grep -E "$PATTERN" | grep -v grep | awk '{print $2}'
+    ps aux | grep -E "$PATTERN" | grep -v grep | grep -v bot_web_control | awk '{print $2}'
 }
 
 # Sensor device nodes that only one process can own at a time. Resolved to

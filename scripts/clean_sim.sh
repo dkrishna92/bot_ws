@@ -37,10 +37,13 @@ WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PATTERN="gz sim|gz-sim|ros2 launch|nav2_|ekf_node|component_container|slam_toolbox|frontier_explore|robot_state_publisher|parameter_bridge|lifecycle_manager|opennav_docking|rviz2|map_saver|sllidar_node|rplidar_composition|$WORKSPACE_ROOT/install/"
 
 list_pids() {
+    # bot_web_control is excluded: its dashboard runs this script from its
+    # own Stop button, and would otherwise match "ros2 launch" / install/
+    # and kill itself.
     # grep -v grep excludes this pipeline's own grep invocation (its
     # command line literally contains the pattern text above, so it would
     # otherwise match itself).
-    ps aux | grep -E "$PATTERN" | grep -v grep | awk '{print $2}'
+    ps aux | grep -E "$PATTERN" | grep -v grep | grep -v bot_web_control | awk '{print $2}'
 }
 
 all_pids() {

@@ -110,6 +110,9 @@ docstring for teleop mode and saving):
 ros2 launch bot_bringup mapping.launch.py rviz:=false
 ```
 
+Or use the browser dashboard to start/stop runs and drive by keyboard --
+see [Web control dashboard](#web-control-dashboard) below.
+
 Both launches pull in `bot_bringup/launch/hardware.launch.py` (robot model
 TF, lidar, OAK-D, motor, watchdog, wheel odometry, IMU) whenever
 `use_sim` is false.
@@ -140,6 +143,22 @@ On hardware, the lidar and OAK-D drivers are skipped (with a log line) if not in
 **To enable real sensors** on the Pi, run `scripts/setup_pi.sh` (see
 [Raspberry Pi 5 setup](#raspberry-pi-5-setup-race-robot)) -- the lidar
 driver isn't an apt package, so a plain `apt install` isn't enough.
+
+## Web control dashboard
+
+`bot_web_control` serves a browser page for starting/stopping the race or
+mapping launch, keyboard/button teleop, saving and resuming mapping
+checkpoints, and a live map view -- handy for mapping the real course
+without a terminal. On the robot:
+
+```bash
+ros2 launch bot_web_control web_control.launch.py use_sim:=false workspace_root:=$HOME/bot_ws
+# then browse to http://<pi-ip-address>:8080
+```
+
+It has no login and its Stop button is **not** an e-stop. Full controls,
+parameters, API and limitations:
+[src/bot_web_control/README.md](src/bot_web_control/README.md).
 
 ## Sensor Integration
 

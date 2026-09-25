@@ -4,8 +4,9 @@ Runs a small HTTP server (stdlib http.server -- no new pip/apt dependency)
 alongside an rclpy node, serving a single-page dashboard with:
   - Start: launches bringup.launch.py (race run) as a `ros2 launch` subprocess.
   - Stop: terminates whichever launch (bringup or mapping) is currently
-    tracked, then best-effort runs scripts/clean_sim.sh for a thorough sweep
-    (see that script -- catches strays a plain process-group kill can miss).
+    tracked, then (if workspace_root is set) best-effort runs
+    scripts/clean_sim.sh -- or scripts/clean_robot.sh when use_sim is false
+    -- for a thorough sweep that catches strays a process-group kill misses.
   - Mapping Run: launches mapping.launch.py with teleop:=true (this tool's
     own teleop feature below is what you'd drive it with). Optionally
     resumes from a previously-saved checkpoint map at a given initial pose
@@ -351,9 +352,12 @@ class WebControlNode(Node):
                 pass
             stopped_any = True
         # Best-effort thorough sweep -- catches anything the process-group
-        # kill above missed (see scripts/clean_sim.sh's own docstring).
+        # kill above missed. On the robot, clean_robot.sh also frees the
+        # sensors and drives the motor pins low; both scripts skip
+        # bot_web_control so this dashboard survives its own Stop.
         if self._workspace_root:
-            script = os.path.join(self._workspace_root, "scripts", "clean_sim.sh")
+            script_name = "clean_sim.sh" if self._use_sim else "clean_robot.sh"
+            script = os.path.join(self._workspace_root, "scripts", script_name)
             if os.path.isfile(script):
                 subprocess.run([script], cwd=self._workspace_root,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

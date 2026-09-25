@@ -15,7 +15,7 @@
   <exec_depend>slam_toolbox</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
-  <!-- Not imported directly -- this package launches bringup.launch.py /
+  <!-- Not imported directly: this package launches bringup.launch.py /
        mapping.launch.py as `ros2 launch` subprocesses, so it can't run
        anything useful without bot_bringup installed. -->
   <exec_depend>bot_bringup</exec_depend>

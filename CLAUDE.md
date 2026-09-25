@@ -134,6 +134,14 @@ everything into `bot_bringup`:
   CFR speed/obstacle course world files (see GAZEBO_WORLDS.md)
 - `bot_explore` — frontier_explore_node: drives autonomous SLAM mapping for
   `bot_bringup/launch/mapping.launch.py` (no teleop needed)
+- `bot_web_control` — web_control_node: browser dashboard (stdlib HTTP
+  server, port 8080, no auth) that starts/stops bringup/mapping as
+  `ros2 launch` subprocesses, teleops via `/cmd_vel` (0.5 s staleness
+  zeroing), saves/resumes slam_toolbox checkpoints, and renders `/map`.
+  Dev/ops convenience only — its Stop is not an e-stop. Stop runs
+  `clean_robot.sh` (or `clean_sim.sh` in sim) when `workspace_root` is
+  set; both scripts exclude `bot_web_control` so the dashboard survives.
+  See `src/bot_web_control/README.md`.
 
 Reasoning: each node has different hardware/library dependencies (pigpio,
 RPi.GPIO, pyserial, cv_bridge/OpenCV) that don't belong on a single
