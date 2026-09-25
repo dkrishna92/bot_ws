@@ -19,11 +19,22 @@ Usage:
 """
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, NotEqualsSubstitution
 from launch.conditions import IfCondition, UnlessCondition
 from launch_ros.actions import Node
+
+
+def _rviz_available():
+    # Launching a Node whose package isn't installed crashes the whole launch
+    # *after* earlier nodes have started, orphaning them (still holding the
+    # lidar port and motor GPIO). The Pi doesn't ship RViz, so check up front.
+    try:
+        get_package_share_directory('rviz2')
+        return True
+    except PackageNotFoundError:
+        return False
 
 
 def generate_launch_description():
@@ -210,8 +221,9 @@ def generate_launch_description():
         # panel for sending 2D Nav Goals, a ThirdPersonFollower camera that
         # actually tracks base_link, and the OAK-D depth point cloud) rather
         # than nav2_bringup's stock nav2_default_view.rviz.
-        actions.append(
-            Node(
+        rviz_action = LogInfo(msg='rviz2 not installed -- skipping RViz')
+        if _rviz_available():
+            rviz_action = Node(
                 package='rviz2',
                 executable='rviz2',
                 arguments=['-d', PathJoinSubstitution([pkg_bringup, 'launch', 'thirdpersonviewer.rviz'])],
@@ -219,6 +231,6 @@ def generate_launch_description():
                 condition=IfCondition(LaunchConfiguration('rviz')),
                 output='screen',
             )
-        )
+        actions.append(rviz_action)
 
     return LaunchDescription(actions)

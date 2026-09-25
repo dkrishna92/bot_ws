@@ -11,12 +11,15 @@ echo "Devices"
 [[ -e /dev/rplidar ]] && ok "RPLIDAR at /dev/rplidar -> $(readlink -f /dev/rplidar)" || bad "RPLIDAR (/dev/rplidar) missing -- USB plugged in? udev rule installed?"
 [[ -e /dev/teensy ]]  && ok "Teensy at /dev/teensy -> $(readlink -f /dev/teensy)"   || bad "Teensy (/dev/teensy) missing -- no odometry/ultrasonics without it"
 lsusb -d 03e7: >/dev/null && ok "OAK-D on USB ($(lsusb -d 03e7: | cut -d' ' -f6-))" || bad "OAK-D not on USB"
-if [[ -r /dev/i2c-1 ]] && command -v i2cget >/dev/null; then
+# BNO055 is on I2C3 (GPIO22/23) -- see hardware.launch.py's imu_i2c_bus
+if [[ -r /dev/i2c-3 ]] && command -v i2cget >/dev/null; then
     # BNO055 CHIP_ID register 0x00 reads 0xA0
-    id=$(i2cget -y 1 0x28 0x00 2>/dev/null || i2cget -y 1 0x29 0x00 2>/dev/null)
-    [[ "$id" == "0xa0" ]] && ok "BNO055 on I2C-1 (chip id 0xA0)" || bad "BNO055 not answering on I2C-1 at 0x28/0x29"
+    id=$(i2cget -y 3 0x28 0x00 2>/dev/null || i2cget -y 3 0x29 0x00 2>/dev/null)
+    [[ "$id" == "0xa0" ]] && ok "BNO055 on I2C-3 (chip id 0xA0)" || bad "BNO055 not answering on I2C-3 at 0x28/0x29 (SDA pin 15, SCL pin 16)"
+elif [[ ! -e /dev/i2c-3 ]]; then
+    bad "/dev/i2c-3 missing -- add dtoverlay=i2c3-pi5,pins_22_23 to /boot/firmware/config.txt and reboot"
 else
-    bad "/dev/i2c-1 not readable (dialout group? log out/in after setup)"
+    bad "/dev/i2c-3 not readable (dialout group? log out/in after setup)"
 fi
 [[ -r /dev/gpiochip4 && -w /dev/gpiochip4 ]] && ok "gpiochip4 (RP1 header GPIO) accessible" || bad "gpiochip4 not accessible (dialout group?)"
 python3 -c "import lgpio, smbus2, serial" 2>/dev/null && ok "python lgpio/smbus2/pyserial importable" || bad "python deps missing -- rerun setup_pi.sh"

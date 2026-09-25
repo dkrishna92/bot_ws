@@ -30,7 +30,6 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     ros-jazzy-nav2-theta-star-planner \
     ros-jazzy-robot-localization \
     ros-jazzy-slam-toolbox \
-    ros-jazzy-rplidar-ros \
     ros-jazzy-depthai-ros-driver \
     ros-jazzy-depth-image-proc \
     ros-jazzy-robot-state-publisher \
@@ -65,6 +64,18 @@ EOF
 udevadm control --reload-rules
 udevadm trigger
 
+echo "== I2C3 for the IMU"
+# BNO055 lives on I2C3 (GPIO22/23, header pins 15/16): the default I2C1 on
+# GPIO2/3 times out on this Pi even with nothing attached. Takes effect
+# after a reboot.
+CONFIG=/boot/firmware/config.txt
+if ! grep -q "^dtoverlay=i2c3-pi5,pins_22_23" "$CONFIG"; then
+    cp "$CONFIG" "$CONFIG.bak.$(date +%Y%m%d%H%M%S)"
+    # Append under an explicit [all] so it isn't caught by a [pi4]/[cm4] section
+    printf '\n[all]\ndtoverlay=i2c3-pi5,pins_22_23\n' >> "$CONFIG"
+    echo "  added I2C3 overlay -- REBOOT required"
+fi
+
 echo "== rosdep"
 [[ -f /etc/ros/rosdep/sources.list.d/20-default.list ]] || rosdep init
 sudo -u "$SUDO_USER" -H rosdep update --rosdistro jazzy >/dev/null
@@ -75,6 +86,14 @@ grep -q "/opt/ros/jazzy/setup.bash" "$BASHRC" || echo "source /opt/ros/jazzy/set
 grep -q "$WS/install/setup.bash" "$BASHRC" || \
     echo "[ -f $WS/install/setup.bash ] && source $WS/install/setup.bash" >> "$BASHRC"
 
+echo "== lidar driver (RPLIDAR S2 needs Slamtec's sllidar_ros2 -- not in apt)"
+SLLIDAR_COMMIT=34300099fadfc772965962dec837bf436706188f
+if [[ ! -d "$WS/src/sllidar_ros2/.git" ]]; then
+    sudo -u "$SUDO_USER" git clone -q https://github.com/Slamtec/sllidar_ros2.git "$WS/src/sllidar_ros2"
+fi
+sudo -u "$SUDO_USER" git -C "$WS/src/sllidar_ros2" fetch -q origin
+sudo -u "$SUDO_USER" git -C "$WS/src/sllidar_ros2" checkout -q "$SLLIDAR_COMMIT"
+
 echo "== build workspace"
 sudo -u "$SUDO_USER" -H bash -c "
     source /opt/ros/jazzy/setup.bash
@@ -83,5 +102,6 @@ sudo -u "$SUDO_USER" -H bash -c "
 "
 
 echo
-echo "Done. Log out and back in (dialout group), then check hardware with:"
+echo "Done. Reboot if the I2C3 overlay was just added (otherwise log out and"
+echo "back in for the dialout group), then check hardware with:"
 echo "  ./scripts/check_hardware.sh"

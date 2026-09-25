@@ -15,7 +15,7 @@ Usage (normally included, but runnable alone for bench-testing sensors):
 """
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo
+from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, LogInfo
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node, LoadComposableNodes
@@ -33,7 +33,7 @@ def _share(pkg):
 def generate_launch_description():
     pkg_gazebo = get_package_share_directory('bot_gazebo')
     pkg_bringup = get_package_share_directory('bot_bringup')
-    pkg_rplidar = _share('rplidar_ros')
+    pkg_sllidar = _share('sllidar_ros2')
     pkg_oak = _share('depthai_ros_driver')
 
     actions = [
@@ -41,6 +41,11 @@ def generate_launch_description():
             'lidar_port',
             default_value='/dev/rplidar',
             description='RPLIDAR serial device (udev symlink from scripts/setup_pi.sh; /dev/ttyUSB0 otherwise)',
+        ),
+        DeclareLaunchArgument(
+            'imu_i2c_bus',
+            default_value='3',
+            description='I2C bus number of the BNO055 (/dev/i2c-N)',
         ),
         DeclareLaunchArgument(
             'teensy_port',
@@ -75,31 +80,51 @@ def generate_launch_description():
             output='screen',
             parameters=[{'serial_port': LaunchConfiguration('teensy_port')}],
         ),
-        Node(package='bot_imu', executable='bno055_node', name='bno055_node', output='screen'),
+        # BNO055 is on I2C3 (GPIO22/23, header pins 15/16), not the default
+        # I2C1 on GPIO2/3 -- I2C1 on this Pi times out with nothing attached.
+        # Needs `dtoverlay=i2c3-pi5,pins_22_23` in /boot/firmware/config.txt.
+        Node(
+            package='bot_imu',
+            executable='bno055_node',
+            name='bno055_node',
+            output='screen',
+            parameters=[{'i2c_bus': LaunchConfiguration('imu_i2c_bus')}],
+        ),
     ]
 
-    if pkg_rplidar is not None:
+    # RPLIDAR S2 (identified 2026-09-25: 1 Mbaud, DenseBoost 32 kHz, 30 m).
+    # The apt rplidar_ros (2.1.0, Slamtec SDK 1.12) segfaults on scan start
+    # with this unit in every scan mode, so this uses Slamtec's sllidar_ros2
+    # (SDK 2.1) built from source into src/ -- scripts/setup_pi.sh clones it.
+    if pkg_sllidar is not None:
         actions.append(
-            IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(
-                    PathJoinSubstitution([pkg_rplidar, 'launch', 'rplidar_a1_launch.py'])
-                ),
-                launch_arguments={
-                    'serial_port': LaunchConfiguration('lidar_port'),
-                    'frame_id': 'lidar_link',
-                }.items(),
+            Node(
+                package='sllidar_ros2',
+                executable='sllidar_node',
+                name='sllidar_node',
+                output='screen',
+                parameters=[
+                    PathJoinSubstitution([pkg_bringup, 'config', 'rplidar_params.yaml']),
+                    {'serial_port': LaunchConfiguration('lidar_port')},
+                ],
             )
         )
     else:
-        actions.append(LogInfo(msg='rplidar_ros not installed -- skipping lidar driver'))
+        actions.append(LogInfo(msg='sllidar_ros2 not built -- skipping lidar driver (see scripts/setup_pi.sh)'))
 
     # OAK-D S2 driver. 'oak_d_lite_launch.py' (an earlier filename used
     # here) doesn't exist in depthai_ros_driver -- 'camera.launch.py' is the
     # real generic launch file. parent_frame attaches the driver's own
     # oak-* TF tree under the URDF's camera_link instead of leaving it as a
     # disconnected tree.
+    #
+    # Wrapped in a scoped GroupAction: camera.launch.py sets launch configs
+    # like use_composition='true' (lowercase), name and namespace, which
+    # otherwise leak into every later include -- nav2_bringup then evals
+    # PythonExpression('not true') and the whole launch dies with
+    # "name 'true' is not defined".
     if pkg_oak is not None:
-        actions.append(
+        actions.append(GroupAction(scoped=True, actions=[
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     PathJoinSubstitution([pkg_oak, 'launch', 'camera.launch.py'])
@@ -115,8 +140,8 @@ def generate_launch_description():
                     # on-device detections), never raw/rectified RGB frames.
                     'rectify_rgb': 'false',
                 }.items(),
-            )
-        )
+            ),
+        ]))
 
         # Depth -> point cloud for the local costmap's voxel_layer (see
         # nav2_params.yaml). depthai_ros_driver's own built-in point cloud
