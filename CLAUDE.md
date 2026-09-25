@@ -167,7 +167,13 @@ Two independent layers:
    a Feather board reading a physical kill-switch input pin and reporting
    status continuously over its own paired LoRa module. See
    `arduino_ws/src/main.cpp` and `feather_ws/src/main.cpp` for the shared
-   serial protocol and each side's logic. (Notes: an earlier version of this doc
+   serial protocol and each side's logic. (Correction 2026-09-25: the
+   e-stop MCU is actually an ESP32 module, not an Arduino Nano -- "Nano"
+   elsewhere in this doc means this board. The ESP32 has onboard
+   Bluetooth/WiFi; any radio link to the Pi must stay status-only and
+   never able to command the relay, or it breaks the isolation above.
+   `arduino_ws` isn't on the racebot Pi, so which PlatformIO board target
+   the firmware builds for is unverified.) (Notes: an earlier version of this doc
    assumed this role would be a Teensy — corrected 2026-09-20. The Teensy
    is now dedicated to wheel encoder reporting instead, see Hardware above
    and `bot_odometry`. An earlier version of this doc and of
@@ -209,17 +215,6 @@ Laptop-first, Pi 5 for final integration:
 - Perception sensor spec confirmation (camera-only CV vs added depth/LiDAR
   for obstacle detection) — pending official course documentation
 - E-stop Arduino Nano firmware (`arduino_ws`) is written (fail-safe deadman
-<<<<<<< Updated upstream
-  logic against a wireless receiver module's heartbeat) but untested on
-  real hardware; `RELAY_PIN`, relay active-high/low polarity, and the
-  receiver module's actual serial framing/baud are still placeholders
-- Wheel encoder Teensy pin assignment TBD — real hardware not yet in hand;
-  the Teensy firmware in `teensy_ws` is written against a placeholder pin
-  assignment. Part number/CPR is no longer a placeholder — confirmed
-  2026-09-24 as Pololu #4843 (979.62 CPR at the gearbox output shaft);
-  `bot_odometry`'s wheel_odom_node's `ticks_per_rev` default is updated to
-  match (was a 1200 placeholder).
-=======
   logic against a heartbeat received over a UART LoRa module) but untested
   on real hardware; `RELAY_PIN`, relay active-high/low polarity, and the
   LoRa module's actual baud rate are still placeholders
@@ -231,11 +226,12 @@ Laptop-first, Pi 5 for final integration:
   AT-command setup (e.g. Ebyte E32 in Normal mode) — if the actual module
   is command-based (e.g. REYAX RYLR) instead, both this firmware and the
   Nano's need an AT-command init sequence added
-- Wheel encoder part number/CPR and Teensy pin assignment TBD — real
-  hardware not yet in hand; `bot_odometry`'s wheel_odom_node and the Teensy
-  firmware in `teensy_ws` are written against placeholder values
-  (ticks_per_rev=1200) that need updating once encoders are chosen
->>>>>>> Stashed changes
+- Wheel encoder Teensy pin assignment TBD — real hardware not yet in hand;
+  the Teensy firmware in `teensy_ws` is written against a placeholder pin
+  assignment. Part number/CPR is no longer a placeholder — confirmed
+  2026-09-24 as Pololu #4843 (979.62 CPR at the gearbox output shaft);
+  `bot_odometry`'s wheel_odom_node's `ticks_per_rev` default is updated to
+  match (was a 1200 placeholder).
 - Nav2 params: `robot_radius` now matches `bot.urdf.xacro`'s real footprint
   and the map-then-race launch wiring (mapping.launch.py / bringup.launch.py)
   is in place; costmap inflation and controller gains are being addressed
@@ -458,3 +454,26 @@ Four related hardware-integration pieces landed together:
   over giving the Teensy a second virtual serial port, for simplicity
   (one USB cable, one node). Trigger/echo pin assignment is still a
   placeholder (see Open items).
+
+## Pi 5 race deployment (2026-09-25)
+
+- **GPIO library is `lgpio`, not pigpio/RPi.GPIO.** pigpio doesn't support
+  the Pi 5's RP1 I/O chip and has no Ubuntu 24.04 arm64 package; RPi.GPIO
+  doesn't work on the Pi 5 either. `motor_node` and `watchdog_node` both
+  use lgpio against `gpiochip4` (RP1 header GPIO on Ubuntu's 6.8 raspi
+  kernel; `gpio_chip` param if that ever changes). lgpio PWM is
+  software-timed, capped at 10 kHz — RP1 hardware PWM on GPIO12/13 via
+  sysfs is the upgrade path if motor jitter shows up under Nav2 CPU load.
+  Both nodes take a `dry_run` param (used by their unit tests).
+- **`bot_bringup/launch/hardware.launch.py`** is the real-hardware layer
+  (robot_state_publisher from `bot.urdf.xacro`, RPLIDAR, OAK-D + depth
+  point cloud, motor/watchdog/wheel_odom/bno055 nodes), included by both
+  `bringup.launch.py` and `mapping.launch.py` unless `use_sim:=true`.
+  Before this, every Pi-only node was commented out of the race launch
+  and nothing published the URDF's static TF on hardware.
+- **`scripts/setup_pi.sh`** (run with sudo) installs the ROS 2 Jazzy
+  runtime + Nav2/SLAM/driver packages (no Gazebo/RViz — Pi is headless),
+  adds udev rules (`/dev/rplidar`, `/dev/teensy` symlinks, OAK-D USB
+  permissions), adds the user to `dialout`, and builds the workspace.
+  **`scripts/check_hardware.sh`** is the race-morning preflight
+  (`--topics` also checks data flow while bringup is running).

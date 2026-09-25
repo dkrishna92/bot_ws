@@ -11,9 +11,9 @@
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>python3-serial</exec_depend>
-  <!-- RPi.GPIO has no standard rosdep key: apt install python3-rpi.gpio
-       on the Pi. Not required on dev machines; watchdog_node degrades
-       gracefully without it. -->
+  <!-- lgpio: apt install python3-lgpio on the Pi (scripts/setup_pi.sh does
+       this). RPi.GPIO doesn't work on the Pi 5. Not required on dev
+       machines; watchdog_node skips the GPIO fault line without it. -->
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

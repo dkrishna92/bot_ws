@@ -56,7 +56,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, NotEqualsSubstitution
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch_ros.actions import Node, LifecycleNode
 
 
@@ -193,6 +193,15 @@ def generate_launch_description():
         # gazebo_sim.launch.py not to also publish it. Spawn pose is resolved
         # in _gazebo_include above (matches resume_pose when resume_map is set).
         OpaqueFunction(function=_gazebo_include),
+
+        # Real-hardware layer (URDF TF, lidar/OAK-D drivers, motor/watchdog/
+        # odometry/IMU nodes) -- Gazebo provides all of this in sim.
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                PathJoinSubstitution([pkg_bringup, 'launch', 'hardware.launch.py'])
+            ),
+            condition=UnlessCondition(LaunchConfiguration('use_sim')),
+        ),
 
         # Odometry fusion -- slam_toolbox's scan matching is more accurate
         # with a fused odom input than raw wheel/ackermann odometry alone.

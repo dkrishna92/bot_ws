@@ -1,7 +1,7 @@
 """Bringup (race) launch file.
 
 Composes the nodes owned by bot_motor, bot_odometry, bot_safety, bot_imu,
-and bot_perception. This package intentionally contains no node
+and bot_perception (the Pi-only ones via hardware.launch.py). This package intentionally contains no node
 implementations of its own -- see CLAUDE.md for why those live in
 separate per-concern packages. Sensor drivers (RPLIDAR, OAK-D) launch
 only if their packages are installed; missing drivers don't block launch.
@@ -11,8 +11,8 @@ than building one -- run mapping.launch.py first to produce
 config/maps/map.yaml for the course you're about to race on.
 
 Usage:
-    # Run with actual hardware (sensors must be installed)
-    ros2 launch bot_bringup bringup.launch.py
+    # Run with actual hardware (headless Pi: no display for RViz)
+    ros2 launch bot_bringup bringup.launch.py rviz:=false
 
     # Run with Gazebo simulation (no real sensors needed)
     ros2 launch bot_bringup bringup.launch.py use_sim:=true
@@ -22,9 +22,8 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, NotEqualsSubstitution
-from launch.conditions import IfCondition
-from launch_ros.actions import Node, LoadComposableNodes
-from launch_ros.descriptions import ComposableNode
+from launch.conditions import IfCondition, UnlessCondition
+from launch_ros.actions import Node
 
 
 def generate_launch_description():
@@ -32,20 +31,6 @@ def generate_launch_description():
     pkg_bringup = get_package_share_directory('bot_bringup')
 
     # Try to find optional packages; skip if not installed
-    try:
-        pkg_rplidar = get_package_share_directory('rplidar_ros')
-        rplidar_available = True
-    except PackageNotFoundError:
-        pkg_rplidar = None
-        rplidar_available = False
-
-    try:
-        pkg_oak = get_package_share_directory('depthai_ros_driver')
-        oak_available = True
-    except PackageNotFoundError:
-        pkg_oak = None
-        oak_available = False
-
     try:
         pkg_nav2 = get_package_share_directory('nav2_bringup')
         nav2_available = True
@@ -121,41 +106,14 @@ def generate_launch_description():
             launch_arguments={'publish_static_map_odom': 'false'}.items(),
         ),
 
-        # Custom nodes (disabled on laptop, enabled on Pi with real hardware)
-        # Uncomment these when running on Raspberry Pi 5
-        # Node(
-        #     package="bot_safety",
-        #     executable="watchdog_node",
-        #     name="watchdog_node",
-        #     output="screen",
-        # ),
-        # Node(
-        #     package="bot_motor",
-        #     executable="motor_node",
-        #     name="motor_node",
-        #     output="screen",
-        # ),
-        # wheel_odom_node also owns the Teensy's ultrasonic reporting now
-        # (see teensy_ws and bot_odometry's own docstring) -- there is no
-        # separate ultrasonic node/package anymore.
-        # Node(
-        #     package="bot_odometry",
-        #     executable="wheel_odom_node",
-        #     name="wheel_odom_node",
-        #     output="screen",
-        # ),
-        # Node(
-        #     package="bot_imu",
-        #     executable="bno055_node",
-        #     name="bno055_node",
-        #     output="screen",
-        # ),
-        # Node(
-        #     package="bot_perception",
-        #     executable="sensor_fusion_node",
-        #     name="sensor_fusion_node",
-        #     output="screen",
-        # ),
+        # Real-hardware layer (URDF TF, lidar/OAK-D drivers, motor/watchdog/
+        # odometry/IMU nodes) -- Gazebo provides all of this in sim.
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                PathJoinSubstitution([pkg_bringup, 'launch', 'hardware.launch.py'])
+            ),
+            condition=UnlessCondition(LaunchConfiguration('use_sim')),
+        ),
 
         # Vision-based autonomous start trigger (bot_perception) -- runs in
         # both sim and on real hardware, unlike the Pi-only nodes above.
@@ -204,78 +162,6 @@ def generate_launch_description():
             }],
         ),
     ]
-
-    # RPLidar driver - only if package is installed and not in sim mode
-    if rplidar_available:
-        actions.append(
-            IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(
-                    PathJoinSubstitution([pkg_rplidar, 'launch', 'rplidar_a1_launch.py'])
-                ),
-                condition=IfCondition(NotEqualsSubstitution(
-                    LaunchConfiguration('use_sim'), 'true'
-                )),
-                launch_arguments={
-                    'serial_port': '/dev/ttyUSB0',
-                    'frame_id': 'lidar_link',
-                }.items(),
-            )
-        )
-
-    # OAK-D S2 driver - only if package is installed and not in sim mode.
-    # 'oak_d_lite_launch.py' (the previous filename here) doesn't exist in
-    # depthai_ros_driver -- 'camera.launch.py' is the real generic launch
-    # file (see /opt/ros/jazzy/share/depthai_ros_driver/launch/). It also
-    # never had params_file wired to this package's own oak_params.yaml
-    # before, so that config was dead.
-    oak_condition = IfCondition(NotEqualsSubstitution(
-        LaunchConfiguration('use_sim'), 'true'
-    ))
-    if oak_available:
-        actions.append(
-            IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(
-                    PathJoinSubstitution([pkg_oak, 'launch', 'camera.launch.py'])
-                ),
-                condition=oak_condition,
-                launch_arguments={
-                    'name': 'oak',
-                    'camera_model': 'OAK-D-S2',
-                    'params_file': PathJoinSubstitution([pkg_bringup, 'config', 'oak_params.yaml']),
-                    # Skip the RGB rectify pipeline -- not needed for the
-                    # depth-only point cloud below, and CLAUDE.md's hardware
-                    # notes call for the host to receive depth (and, later,
-                    # on-device detections), never raw/rectified RGB frames.
-                    'rectify_rgb': 'false',
-                }.items(),
-            )
-        )
-
-        # Depth -> point cloud for the local costmap's voxel_layer (see
-        # nav2_params.yaml). depthai_ros_driver's own built-in point cloud
-        # path (the 'pointcloud.enable' launch arg above) only produces a
-        # colorized cloud via PointCloudXyzrgbNode, which requires the RGB
-        # stream -- exactly the raw-frame path CLAUDE.md says to avoid. Using
-        # depth_image_proc's XYZ-only node against the depth image directly
-        # avoids pulling RGB into this at all. Loads into the same component
-        # container camera.launch.py just created ('<name>_container').
-        actions.append(
-            LoadComposableNodes(
-                target_container='/oak_container',
-                condition=oak_condition,
-                composable_node_descriptions=[
-                    ComposableNode(
-                        package='depth_image_proc',
-                        plugin='depth_image_proc::PointCloudXyzNode',
-                        name='oak_points_node',
-                        remappings=[
-                            ('image_rect', 'oak/stereo/image_raw'),
-                            ('points', 'oak/points'),
-                        ],
-                    ),
-                ],
-            )
-        )
 
     # Robot localization (EKF odometry fusion) - only if package is installed.
     # robot_localization's own ekf.launch.py ignores 'namespace'/'params_file'

@@ -25,9 +25,9 @@ from std_msgs.msg import Bool
 from sensor_msgs.msg import LaserScan
 
 try:
-    import RPi.GPIO as GPIO
+    import lgpio  # RPi.GPIO doesn't work on the Pi 5 -- see bot_motor's motor_node
 except ImportError:
-    GPIO = None
+    lgpio = None
 
 # try:
 #     import serial
@@ -36,9 +36,11 @@ except ImportError:
 
 
 class WatchdogNode(Node):
-    def __init__(self):
-        super().__init__("watchdog_node")
+    def __init__(self, **kwargs):
+        super().__init__("watchdog_node", **kwargs)
 
+        self.declare_parameter("dry_run", False)
+        self.declare_parameter("gpio_chip", 4)  # RP1 header GPIO, see motor_node
         self.declare_parameter("fault_gpio_pin", 26)
         # self.declare_parameter("mcu_serial_port", "/dev/ttyACM1")
         # self.declare_parameter("mcu_baudrate", 115200)
@@ -51,10 +53,18 @@ class WatchdogNode(Node):
         self._last_scan_time = None
         self.create_subscription(LaserScan, "scan", self._on_scan, 10)
 
-        if GPIO is not None:
-            GPIO.setmode(GPIO.BCM)
-            GPIO.setup(self._fault_pin, GPIO.OUT)
-            GPIO.output(self._fault_pin, False)
+        self._h = None
+        if lgpio is not None and not self.get_parameter("dry_run").value:
+            chip = self.get_parameter("gpio_chip").value
+            try:
+                self._h = lgpio.gpiochip_open(chip)
+                lgpio.gpio_claim_output(self._h, self._fault_pin, 0)
+            except lgpio.error as e:
+                self.get_logger().error(f"could not claim fault pin on gpiochip{chip}: {e} -- "
+                                        "continuing without the GPIO fault line")
+                if self._h is not None:
+                    lgpio.gpiochip_close(self._h)
+                self._h = None
 
         self._mcu_serial = None
         self._mcu_estop_active = False
@@ -101,8 +111,8 @@ class WatchdogNode(Node):
         mcu_estop = self._check_mcu_status()
         fault = stale_lidar or mcu_estop
 
-        if GPIO is not None:
-            GPIO.output(self._fault_pin, fault)
+        if self._h is not None:
+            lgpio.gpio_write(self._h, self._fault_pin, 1 if fault else 0)
 
         if fault and stale_lidar:
             self.get_logger().error("lidar scan stale -- publishing fault")
@@ -110,9 +120,10 @@ class WatchdogNode(Node):
         self._pub.publish(Bool(data=fault))
 
     def destroy_node(self) -> None:
-        if GPIO is not None:
-            GPIO.output(self._fault_pin, True)  # fail safe: assert fault on exit
-            GPIO.cleanup()
+        if self._h is not None:
+            lgpio.gpio_write(self._h, self._fault_pin, 1)  # fail safe: assert fault on exit
+            lgpio.gpiochip_close(self._h)
+            self._h = None
         # if self._mcu_serial is not None:
         #     self._mcu_serial.close()
         super().destroy_node()
