@@ -1,10 +1,11 @@
 """Behavior tests for motor_node's cmd_vel timeout / fault-stop safety logic.
 
-Runs in dry-run mode (pigpio absent) -- _set_channel is monkeypatched per
+Runs in dry-run mode (dry_run param) -- _set_channel is monkeypatched per
 test to record commanded duty cycles instead of touching real GPIO.
 """
 import pytest
 import rclpy
+from rclpy.parameter import Parameter
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Bool
 
@@ -14,7 +15,7 @@ from bot_motor.motor_node import MotorNode
 @pytest.fixture
 def node():
     rclpy.init()
-    n = MotorNode()
+    n = MotorNode(parameter_overrides=[Parameter("dry_run", value=True)])
     yield n
     n.destroy_node()
     rclpy.shutdown()
