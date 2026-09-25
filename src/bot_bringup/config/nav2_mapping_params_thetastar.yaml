@@ -1,0 +1,465 @@
+# ============================================================================
+# A/B TEST VARIANT (Theta* planner): planner_server.GridBased swapped, everything
+# else is an exact copy of nav2_mapping_params.yaml.
+# See CLAUDE.md's "Nav2 planner/controller comparison" section for the
+# full rationale and test protocol.
+# Launch with:
+#   ros2 launch bot_bringup mapping.launch.py use_sim:=true nav2_params_file:=nav2_mapping_params_thetastar.yaml
+# ============================================================================
+# Variant of nav2_params.yaml used only by mapping.launch.py (via
+# navigation_launch.py -- amcl/map_server below are unused there and
+# harmless). The one deliberate difference is global_costmap.plugins,
+# documented at that section below; nav2_common's RewrittenYaml can't
+# safely override a list-valued parameter like a plugin list (its
+# converter only handles scalars -- a string substitution there would
+# silently corrupt the parameter's type, the same class of bug as the
+# 1e-10-parses-as-a-string issue elsewhere in this file), so a small
+# dedicated copy is the safer route rather than a shared file with a
+# broken override. Keep changes to bringup.launch.py's race-day behavior
+# (this file's amcl/costmap/planner tuning) in nav2_params.yaml, and only
+# port them here if they apply to mapping too.
+amcl:
+  ros__parameters:
+    use_sim_time: True
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    alpha5: 0.2
+    base_frame_id: "base_link"
+    beam_skip_distance: 0.5
+    beam_skip_error_threshold: 0.9
+    beam_skip_threshold: 0.3
+    do_beamskip: false
+    global_frame_id: "map"
+    # set_initial_pose defaults to false, and nothing ever publishes
+    # /initialpose in a race run (no human to click "2D Pose Estimate" in
+    # RViz during an autonomous, vision-triggered start) -- without it amcl
+    # never seeds its particle filter or starts broadcasting map->odom, so
+    # the "map" frame never comes into existence and every downstream
+    # consumer (global costmap, planner) times out waiting for a transform
+    # that will never appear. This looks like "the planner is broken" but
+    # localization never started. x/y/yaw below match the fixed course-start
+    # spawn pose used by both gazebo_sim.launch.py (-x -0.7 -y 0.0) and
+    # mapping.launch.py, which is also where the saved map's origin is
+    # anchored -- update these if the start box spawn pose ever changes.
+    set_initial_pose: true
+    initial_pose:
+      x: -0.7
+      y: 0.0
+      z: 0.0
+      yaw: 0.0
+    lambda_short: 0.1
+    laser_likelihood_max_dist: 2.0
+    laser_max_range: 100.0
+    laser_min_range: 0.1
+    laser_model_type: "likelihood_field"
+    max_beams: 60
+    max_particles: 2000
+    min_particles: 500
+    odom_frame_id: "odom"
+    pf_err: 0.05
+    pf_z: 0.99
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
+    resample_interval: 1
+    # Fully-qualified pluginlib name required on this Nav2 (Jazzy) --
+    # the short name "differential" from older Nav2 versions isn't a
+    # registered plugin here and made amcl fail to configure ("class
+    # differential ... does not exist"), which meant amcl never
+    # published map->odom -- Nav2 had no localized pose to plan from,
+    # so it looked like a planner problem even though the planner
+    # itself was never the issue.
+    robot_model_type: "nav2_amcl::DifferentialMotionModel"
+    save_pose_rate: 0.5
+    sigma_hit: 0.2
+    sigma_short: 0.1
+    tf_broadcast: true
+    transform_tolerance: 1.0
+    update_min_a: 0.2
+    update_min_d: 0.25
+    z_hit: 0.5
+    z_max: 0.05
+    z_rand: 0.5
+    z_short: 0.05
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: True
+    global_frame: map
+    robot_base_frame: base_link
+    odom_topic: /odom
+    bt_loop_duration: 10
+    default_server_timeout: 20
+    # No plugin_lib_names / default_bt_xml_filename here -- those are the
+    # deprecated pre-Iron config style. This Nav2 version auto-registers all
+    # standard BT nodes itself; explicitly listing them too (as this file
+    # used to) causes "ID [ComputePathToPose] already registered" and
+    # crashes bt_navigator. The XML filename we had
+    # ("navigate_w_replanning_and_recovery.xml") also didn't match any real
+    # file -- the actual ones are navigate_to_pose_w_replanning_and_recovery.xml
+    # and navigate_through_poses_w_replanning_and_recovery.xml, which are
+    # exactly what these navigator plugins default to when left unset.
+    navigators: ["navigate_to_pose", "navigate_through_poses"]
+    navigate_to_pose:
+      plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
+    navigate_through_poses:
+      plugin: "nav2_bt_navigator::NavigateThroughPosesNavigator"
+
+controller_server:
+  ros__parameters:
+    use_sim_time: True
+    controller_frequency: 20.0
+    min_x_velocity_threshold: 0.001
+    min_theta_velocity_threshold: 0.001
+    controller_plugins: ["FollowPath"]
+
+    FollowPath:
+      plugin: "dwb_core::DWBLocalPlanner"
+      debug_trajectory_details: true
+      max_vel_x: 0.5
+      min_vel_x: 0.0
+      max_vel_y: 0.0
+      min_vel_y: 0.0
+      max_vel_theta: 1.0
+      min_speed_xy: 0.0
+      max_speed_xy: 0.5
+      min_speed_theta: 0.0
+      max_speed_theta: 1.0
+      acc_lim_x: 2.5
+      acc_lim_y: 0.0
+      acc_lim_theta: 3.2
+      decel_lim_x: -2.5
+      decel_lim_y: 0.0
+      decel_lim_theta: -3.2
+      vx_samples: 20
+      vy_samples: 5
+      vtheta_samples: 20
+      sim_time: 1.7
+      linear_granularity: 0.05
+      angular_granularity: 0.025
+      transform_tolerance: 0.2
+      xy_goal_tolerance: 0.25
+      trans_stopped_velocity: 0.25
+      short_circuit_trajectory_evaluation: true
+      stateful: true
+      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign"]
+      BaseObstacle:
+          # 0.3 overpowered PathAlign/GoalAlign in the tight corridor,
+          # making the robot back away from obstacles ahead instead of
+          # continuing to follow the path -- 0.1 is a middle ground.
+          scale: 0.1
+          max_scaling_factor: 0.1
+          scoring_pose_frame: "base_link"
+      GoalAlign:
+          scale: 24.0
+          forward_point_distance: 0.325
+      PathAlign:
+          scale: 32.0
+          forward_point_distance: 0.325
+      RotateToGoal:
+          # Lowered from 32 -- tied with PathAlign, RotateToGoal was
+          # dominating trajectory scoring and making the robot repeatedly
+          # spin in place to face the path instead of driving forward
+          # along it in tight corridors.
+          scale: 8.0
+          slowing_factor: 5.0
+          lookahead_time: -1.0
+      Oscillation:
+          scale: 1.0
+          # Requires more forward progress before a reversal trajectory is
+          # allowed again -- default 0.05m let the robot flip-flop forward
+          # and backward almost immediately.
+          oscillation_reset_dist: 0.3
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      use_sim_time: True
+      update_frequency: 10.0
+      publish_frequency: 10.0
+      global_frame: odom
+      robot_base_frame: base_link
+      rolling_window: true
+      width: 3
+      height: 3
+      resolution: 0.05
+      # 0.26 is the true circumscribed-circle radius of the actual
+      # measured chassis (17.7 x 10.6in / 0.45 x 0.27m,
+      # sqrt((0.45/2)^2+(0.27/2)^2)), matching bot.urdf.xacro's real
+      # base_link collision box. Do NOT shrink this below whatever
+      # bot.urdf.xacro's real footprint currently is -- doing so let Nav2
+      # plan through gaps the simulated robot's actual collision geometry
+      # can't fit through, causing real Gazebo collisions (chassis
+      # clipping bales) that looked like a DWB tuning problem ("drives
+      # forward then gets pushed back") but were actually physics. Keep
+      # this in sync with nav2_params.yaml's copy of this same comment if
+      # base_width/base_length change again.
+      robot_radius: 0.26
+      plugins: ["obstacle_layer", "voxel_layer", "inflation_layer"]
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        # 0.35, not 0.55 (nav2_params.yaml's race-day value) -- mapping-only
+        # override. The corridor here is ~1.3m wide against a 0.37m
+        # robot_radius; 0.55 inflation left most of the centerline at cost
+        # 60-90/100 (confirmed by dumping the live costmap), which doesn't
+        # change the hard inscribed-lethal band (that's fixed at
+        # robot_radius regardless of this value -- do not expect this
+        # alone to fix a start pose already inside it) but does reduce the
+        # cost pressure that pushes planned/driven paths off centerline in
+        # the first place.
+        inflation_radius: 0.35
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: true
+          marking: true
+          data_type: "LaserScan"
+      # OAK-D S2 depth feed, alongside RPLIDAR's obstacle_layer above -- see
+      # nav2_params.yaml's copy of this comment for the full rationale.
+      voxel_layer:
+        plugin: "nav2_costmap_2d::VoxelLayer"
+        enabled: true
+        publish_voxel_map: true
+        origin_z: 0.0
+        z_resolution: 0.05
+        z_voxels: 16
+        max_obstacle_height: 1.0
+        mark_threshold: 0
+        observation_sources: oak_points
+        oak_points:
+          topic: /oak/points
+          data_type: "PointCloud2"
+          min_obstacle_height: 0.02
+          max_obstacle_height: 1.0
+          obstacle_max_range: 3.0
+          clearing: true
+          marking: true
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        enabled: true
+        map_subscribe_transient_local: true
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: True
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_link
+      # See local_costmap's robot_radius comment above -- same caveat applies.
+      robot_radius: 0.26
+      resolution: 0.05
+      # rolling_window: true, with a generous fixed size below -- during
+      # mapping the map this costmap tracks (slam_toolbox's /map) keeps
+      # growing and re-origining as new area is explored. Nav2's
+      # LayeredCostmap only resizes a *non-rolling* costmap's master grid
+      # once, off the first map it ever receives; a later map of different
+      # size/origin isn't used to resize it again, so the static_layer's
+      # output silently goes stale -- confirmed live: after exploring for
+      # a while, /global_costmap/costmap's origin and dimensions were
+      # frozen at their very-first-map values (checked repeatedly, several
+      # seconds apart, unchanged) while the actual slam_toolbox /map had
+      # long since grown far past them, and the planner was refusing to
+      # plan ("Failed to create plan with tolerance of: 0.25") to points
+      # the raw, current /map clearly showed as free. A rolling window
+      # sidesteps this: it's always freshly centered/sized around the
+      # robot's current position, the same reason local_costmap's
+      # rolling_window above is immune to this class of bug. 20x20m is
+      # comfortably larger than any single frontier hop this course
+      # produces. Still no obstacle_layer here (unlike nav2_params.yaml's
+      # race-day version) -- the static_layer (fed directly from
+      # slam_toolbox's already-sensor-derived /map) already covers what
+      # the lidar sees. voxel_layer (OAK-D) IS added below though: it
+      # catches 3D/low-lying hazards the lidar's scan plane and slam's map
+      # both miss, which frontier_explore_node's goal picking should also
+      # avoid, not just the local costmap while already driving past one.
+      plugins: ["static_layer", "voxel_layer", "inflation_layer"]
+      rolling_window: true
+      width: 20
+      height: 20
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        enabled: true
+        map_subscribe_transient_local: true
+      # Same OAK-D depth feed as local_costmap's voxel_layer above -- see
+      # that block's comment for the full rationale.
+      voxel_layer:
+        plugin: "nav2_costmap_2d::VoxelLayer"
+        enabled: true
+        publish_voxel_map: true
+        origin_z: 0.0
+        z_resolution: 0.05
+        z_voxels: 16
+        max_obstacle_height: 1.0
+        mark_threshold: 0
+        observation_sources: oak_points
+        oak_points:
+          topic: /oak/points
+          data_type: "PointCloud2"
+          min_obstacle_height: 0.02
+          max_obstacle_height: 1.0
+          obstacle_max_range: 3.0
+          clearing: true
+          marking: true
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        # See local_costmap's inflation_radius comment above -- same
+        # mapping-only rationale applies here.
+        inflation_radius: 0.35
+
+planner_server:
+  ros__parameters:
+    use_sim_time: True
+    expected_planner_frequency: 20.0
+    planner_plugins: ["GridBased"]
+    # Theta*, not NavFn/SmacPlannerHybrid -- this robot is skid-steer
+    # diff-drive (can rotate in place), so it doesn't need SmacHybrid's
+    # Reeds-Shepp non-holonomic minimum-turning-radius constraints, which
+    # were causing "exceeded maximum iterations" in the tight corridor near
+    # the course start. Theta* is an any-angle A* variant: unlike NavFn's
+    # 4/8-connected grid search (which staircases through a corridor),
+    # Theta* uses line-of-sight checks to produce straight/near-optimal
+    # paths, which should reduce the amount of corrective steering DWB has
+    # to do to follow a jagged reference path in the 1.3m-wide corridor.
+    # NOTE: unlike NavfnPlanner (tolerance: 0.25 in the baseline), this
+    # plugin has no `tolerance` parameter at all (confirmed absent) -- it
+    # always plans exactly to the requested goal and can't settle for a
+    # nearby cell. This is the single biggest risk for this file
+    # specifically: frontier_explore_node's goals are frontier-cluster
+    # centroids, by construction adjacent to unknown space -- exactly the
+    # kind of marginal goal NavFn's tolerance used to rescue. Watch for an
+    # increase in "did not succeed ... blacklisting" log lines when
+    # exercising this variant (see CLAUDE.md's Nav2 planner/controller
+    # comparison section for the test protocol).
+    GridBased:
+      plugin: "nav2_theta_star_planner::ThetaStarPlanner"
+      how_many_corners: 8
+      w_euc_cost: 1.0
+      # Upstream default is 2.0; raised to bias the search away from
+      # inflated-cost cells near the corridor walls (inflation_radius
+      # below already covers most of this ~1.3m corridor with some cost).
+      w_traversal_cost: 3.0
+      allow_unknown: true
+      terminal_checking_interval: 5000
+      use_final_approach_orientation: false
+
+smoother_server:
+  ros__parameters:
+    use_sim_time: True
+    smoother_plugins: ["simple_smoother"]
+    simple_smoother:
+      plugin: "nav2_smoother::SimpleSmoother"
+      # 1e-10 (no decimal point) parses as a YAML string, not a float --
+      # ROS 2's parameter loader then rejects it ("is of type double,
+      # setting it to string is not allowed") and smoother_server fails
+      # to configure, aborting the whole lifecycle bringup (so nothing,
+      # including the planner, ever activates). 1.0e-10 parses as a float.
+      tolerance: 1.0e-10
+      max_its: 1000
+      do_refinement: true
+
+behavior_server:
+  ros__parameters:
+    use_sim_time: True
+    local_costmap_topic: local_costmap/costmap_raw
+    local_footprint_topic: local_costmap/published_footprint
+    global_costmap_topic: global_costmap/costmap_raw
+    global_footprint_topic: global_costmap/published_footprint
+    cycle_frequency: 10.0
+    # Jazzy: the node is behavior_server with behavior_plugins and the
+    # nav2_behaviors:: namespace. The old recovery_server / recovery_plugins
+    # / nav2_recoveries:: names are silently IGNORED here, which had let
+    # behavior_server fall back to its full default plugin set at runtime.
+    # backup/drive_on_heading ARE registered: the 360-degree 2D RPLIDAR
+    # covers the rear in its scan plane and fills the local costmap behind
+    # the robot, so BackUp's collision check has data to act on (it only
+    # sees the lidar plane -- low rear obstacles below it stay unseen).
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"]
+    spin:
+      plugin: "nav2_behaviors::Spin"
+    backup:
+      plugin: "nav2_behaviors::BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors::DriveOnHeading"
+    wait:
+      plugin: "nav2_behaviors::Wait"
+    local_frame: odom
+    global_frame: map
+    robot_base_frame: base_link
+    transform_tolerance: 0.1
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.4
+    rotational_acc_lim: 3.2
+
+map_server:
+  ros__parameters:
+    use_sim_time: True
+    yaml_filename: ""
+
+# This Nav2 version's navigation_launch.py brings up collision_monitor as a
+# standard lifecycle node regardless of whether it's actually wired into the
+# cmd_vel path -- with no config at all it fails "observation_sources is not
+# initialized" during configure and aborts the whole lifecycle bringup
+# (controller_server, bt_navigator, everything). Config below is copied
+# as-is from nav2_bringup's own reference params. It's currently a no-op:
+# nothing publishes cmd_vel_in_topic, so collision_monitor never fires and
+# controller_server's direct FollowPath -> cmd_vel publish is unaffected.
+# To actually use it as a safety layer, add a velocity_smoother publishing
+# cmd_vel_smoothed and point controller_server's output there instead of
+# straight to cmd_vel.
+collision_monitor:
+  ros__parameters:
+    use_sim_time: True
+    base_frame_id: "base_link"
+    odom_frame_id: "odom"
+    cmd_vel_in_topic: "cmd_vel_smoothed"
+    cmd_vel_out_topic: "cmd_vel"
+    state_topic: "collision_monitor_state"
+    transform_tolerance: 0.2
+    source_timeout: 1.0
+    base_shift_correction: True
+    stop_pub_timeout: 2.0
+    # An empty list here fails ROS 2 parameter type inference at startup
+    # ("polygons: No parameter value set") -- an empty array has no
+    # elements to infer element-type from. Use nav2_bringup's actual
+    # default polygon instead of trying to invent an empty/disabled one.
+    polygons: ["FootprintApproach"]
+    FootprintApproach:
+      type: "polygon"
+      action_type: "approach"
+      footprint_topic: "/local_costmap/published_footprint"
+      time_before_collision: 1.2
+      simulation_time_step: 0.1
+      min_points: 6
+      visualize: False
+      enabled: True
+    observation_sources: ["scan"]
+    scan:
+      type: "scan"
+      topic: "scan"
+      min_height: 0.15
+      max_height: 2.0
+      enabled: True
+
+# Another node navigation_launch.py brings up unconditionally (see the
+# collision_monitor comment above for the pattern) -- this project has no
+# charging dock, so dock_plugins is never actually invoked (nothing calls
+# the dock_robot/undock_robot actions), but the list can't be left empty
+# for the same array-type-inference reason as collision_monitor's polygons.
+docking_server:
+  ros__parameters:
+    use_sim_time: True
+    base_frame: "base_link"
+    fixed_frame: "odom"
+    dock_plugins: ["simple_charging_dock"]
+    simple_charging_dock:
+      plugin: "opennav_docking::SimpleChargingDock"

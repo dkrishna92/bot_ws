@@ -19,16 +19,18 @@ amcl:
     # the "map" frame never comes into existence and every downstream
     # consumer (global costmap, planner) times out waiting for a transform
     # that will never appear. This looks like "the planner is broken" but
-    # localization never started. x/y/yaw below match the fixed course-start
-    # spawn pose used by both gazebo_sim.launch.py (-x -0.7 -y 0.0) and
-    # mapping.launch.py, which is also where the saved map's origin is
-    # anchored -- update these if the start box spawn pose ever changes.
+    # localization never started. x/y/yaw below match speed_course_cfr's
+    # spawn pose (gazebo_sim.launch.py's _DEFAULT_SPAWN_POSES, now the
+    # default world) -- update these if the default world or its spawn
+    # pose ever changes again, and regenerate config/maps/map.yaml via
+    # mapping.launch.py against that same world so the saved map actually
+    # covers this pose (a map built for a different world/spawn won't).
     set_initial_pose: true
     initial_pose:
-      x: -0.7
-      y: 0.0
+      x: 19.0
+      y: 4.75
       z: 0.0
-      yaw: 0.0
+      yaw: 3.14159265
     lambda_short: 0.1
     laser_likelihood_max_dist: 2.0
     laser_max_range: 100.0
@@ -176,11 +178,16 @@ local_costmap:
       # pushed back") but were actually physics. Keep this in sync if
       # base_width/base_length change again.
       robot_radius: 0.26
-      plugins: ["obstacle_layer", "inflation_layer"]
+      plugins: ["obstacle_layer", "voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.55
+        # 0.55 left the slalom lane between adjacent bale rows at nonzero
+        # cost across its full width: rows are ~1.4m apart (0.94m clear
+        # gap, from speed_course_cfr.world's bale_57-64/194-199 poses),
+        # so a 0.55 radius from each side overlaps past the centerline.
+        # 0.35 matches nav2_mapping_params.yaml's already-validated value.
+        inflation_radius: 0.35
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
@@ -191,6 +198,36 @@ local_costmap:
           clearing: true
           marking: true
           data_type: "LaserScan"
+      # RPLIDAR (obstacle_layer above) stays the 2D layer for the global map
+      # match / SLAM side of things -- clean, long-range, unaffected by
+      # lighting. This voxel_layer is the OAK-D S2's depth feed instead: it
+      # catches the 3D/low-lying hazards a planar LiDAR sweep can miss (a
+      # table edge below the LiDAR's scan plane, a stray object, a
+      # step/cliff), letting the local controller path around them in real
+      # time while the LiDAR-built map still anchors global bearings. Source
+      # topic (/oak/points) comes from bringup.launch.py's depth_image_proc
+      # PointCloudXyzNode on real hardware -- see that launch file's comment
+      # for why. In Gazebo, the same topic is published instead by
+      # bot.urdf.xacro's oak_depth_sensor (gz-sim depth_camera), bridged in
+      # gazebo_sim.launch.py -- see that sensor's comment.
+      voxel_layer:
+        plugin: "nav2_costmap_2d::VoxelLayer"
+        enabled: true
+        publish_voxel_map: true
+        origin_z: 0.0
+        z_resolution: 0.05
+        z_voxels: 16
+        max_obstacle_height: 1.0
+        mark_threshold: 0
+        observation_sources: oak_points
+        oak_points:
+          topic: /oak/points
+          data_type: "PointCloud2"
+          min_obstacle_height: 0.02
+          max_obstacle_height: 1.0
+          obstacle_max_range: 3.0
+          clearing: true
+          marking: true
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         enabled: true
@@ -207,7 +244,7 @@ global_costmap:
       # See local_costmap's robot_radius comment above -- same caveat applies.
       robot_radius: 0.26
       resolution: 0.05
-      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      plugins: ["static_layer", "obstacle_layer", "voxel_layer", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         enabled: true
@@ -222,10 +259,35 @@ global_costmap:
           clearing: true
           marking: true
           data_type: "LaserScan"
+      # Same OAK-D depth feed as local_costmap's voxel_layer above -- see
+      # that block's comment for the full rationale (3D/low-lying hazards
+      # a planar lidar sweep misses). Global planning previously only saw
+      # the lidar-built static map + live lidar scan, so a route could be
+      # planned straight through something only the depth camera sees.
+      voxel_layer:
+        plugin: "nav2_costmap_2d::VoxelLayer"
+        enabled: true
+        publish_voxel_map: true
+        origin_z: 0.0
+        z_resolution: 0.05
+        z_voxels: 16
+        max_obstacle_height: 1.0
+        mark_threshold: 0
+        observation_sources: oak_points
+        oak_points:
+          topic: /oak/points
+          data_type: "PointCloud2"
+          min_obstacle_height: 0.02
+          max_obstacle_height: 1.0
+          obstacle_max_range: 3.0
+          clearing: true
+          marking: true
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.55
+        # See local_costmap's inflation_radius comment above -- same
+        # bale-row-spacing rationale applies here.
+        inflation_radius: 0.35
 
 planner_server:
   ros__parameters:
@@ -257,17 +319,39 @@ smoother_server:
       max_its: 1000
       do_refinement: true
 
-recovery_server:
+behavior_server:
   ros__parameters:
     use_sim_time: True
-    # back_up deliberately not registered -- no rear-facing perception
-    # sensors on this robot, so blind reversing during recovery isn't safe.
-    recovery_plugins: ["spin"]
+    local_costmap_topic: local_costmap/costmap_raw
+    local_footprint_topic: local_costmap/published_footprint
+    global_costmap_topic: global_costmap/costmap_raw
+    global_footprint_topic: global_costmap/published_footprint
+    cycle_frequency: 10.0
+    # Jazzy: the node is behavior_server with behavior_plugins and the
+    # nav2_behaviors:: namespace. The old recovery_server / recovery_plugins
+    # / nav2_recoveries:: names are silently IGNORED here, which had let
+    # behavior_server fall back to its full default plugin set at runtime.
+    # backup/drive_on_heading ARE registered: the 360-degree 2D RPLIDAR
+    # covers the rear in its scan plane and fills the local costmap behind
+    # the robot, so BackUp's collision check has data to act on (it only
+    # sees the lidar plane -- low rear obstacles below it stay unseen).
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"]
     spin:
-      plugin: "nav2_recoveries::Spin"
-      simulate_ahead_time: 2.0
-      max_rotations: 10.0
-      max_effort: 100.0
+      plugin: "nav2_behaviors::Spin"
+    backup:
+      plugin: "nav2_behaviors::BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors::DriveOnHeading"
+    wait:
+      plugin: "nav2_behaviors::Wait"
+    local_frame: odom
+    global_frame: map
+    robot_base_frame: base_link
+    transform_tolerance: 0.1
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.4
+    rotational_acc_lim: 3.2
 
 map_server:
   ros__parameters:

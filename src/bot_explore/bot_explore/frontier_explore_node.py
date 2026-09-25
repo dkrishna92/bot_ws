@@ -61,12 +61,34 @@ class FrontierExploreNode(Node):
         self.declare_parameter("map_topic", "map")
         self.declare_parameter("save_map_name", "src/bot_bringup/config/maps/map")
         self.declare_parameter("planning_period_s", 2.0)
+        # Nav2's DWB RotateToGoalCritic only allows rotation (no translation)
+        # once the robot is within xy_goal_tolerance (0.25 in
+        # nav2_(mapping_)params.yaml) of the *final* goal -- correct for the
+        # last few centimeters of a normal approach, but a frontier this
+        # close to the robot means that "final approach" phase covers
+        # almost the entire trip. Measured live: a frontier ~0.2-0.4m away
+        # made the robot spend 38% of a 240s episode purely rotating in
+        # place (vs. 1.9% actually driving) fighting to nail an exact final
+        # heading it had almost no distance to approach from. The robot's
+        # sensors already cover this range regardless of whether it drives
+        # there, so goals this close skip Nav2 entirely instead.
+        self.declare_parameter("min_nav_distance_m", 0.35)
+        # Deliberately less than nav2_(mapping_)params.yaml's robot_radius
+        # (0.26) + inflation_radius (0.35) = 0.61 total reach -- this only
+        # needs to keep the goal *point itself* out of the hard/inscribed-
+        # lethal zone around a real obstacle; Nav2's own costmap-aware DWB
+        # controller already handles approaching safely through the
+        # decaying-cost zone beyond that. See _find_frontiers' docstring for
+        # the actual bug this exists to fix.
+        self.declare_parameter("min_obstacle_clearance_m", 0.35)
 
         self._min_frontier_size = self.get_parameter("min_frontier_size").value
         self._blacklist_radius = self.get_parameter("goal_blacklist_radius_m").value
         self._heading_turn_penalty = self.get_parameter("heading_turn_penalty").value
         self._min_goal_distance = self.get_parameter("min_goal_distance_m").value
         self._save_map_name = self.get_parameter("save_map_name").value
+        self._min_obstacle_clearance = self.get_parameter("min_obstacle_clearance_m").value
+        self._min_nav_distance = self.get_parameter("min_nav_distance_m").value
 
         self._map: OccupancyGrid | None = None
         self._blacklist: list[tuple[float, float]] = []
@@ -124,7 +146,27 @@ class FrontierExploreNode(Node):
         return t.transform.translation.x, t.transform.translation.y, yaw
 
     def _find_frontiers(self) -> list[tuple[float, float, int]]:
-        """Cluster frontier cells; return (world_x, world_y, cluster_size) per cluster."""
+        """Cluster frontier cells; return (world_x, world_y, cluster_size) per cluster.
+
+        Each cluster's goal point is its medoid (the actual member cell
+        nearest the cluster's arithmetic mean), not the raw mean itself. A
+        frontier cluster that wraps around a corner -- which is exactly what
+        happens right next to an obstacle, since the sensor shadow behind it
+        is what creates the frontier in the first place -- can have a mean
+        that lands outside the free-cell region entirely, sometimes right on
+        top of the very obstacle casting the shadow, even though every
+        individual member cell is a real free cell. The medoid is always one
+        of those real free cells.
+
+        Clusters whose medoid doesn't have min_obstacle_clearance_m of room
+        around it (checked directly against occupied cells in this map, not
+        Nav2's costmap -- this node has no reason to know Nav2's inflation
+        params) are dropped entirely. Previously, unfiltered centroids could
+        land inside/on an obstacle's footprint; Nav2 would then spend 10+
+        seconds per attempt failing to reach it (only sometimes rescued by
+        xy_goal_tolerance letting it stop short) before the goal got
+        blacklisted after wasting the time.
+        """
         msg = self._map
         w, h = msg.info.width, msg.info.height
         grid = np.array(msg.data, dtype=np.int8).reshape(h, w)
@@ -134,6 +176,7 @@ class FrontierExploreNode(Node):
 
         free = (grid >= 0) & (grid <= FREE_MAX)
         unknown = grid == UNKNOWN
+        occupied = grid > FREE_MAX
 
         frontier = np.zeros_like(free)
         frontier[:-1, :] |= free[:-1, :] & unknown[1:, :]
@@ -144,6 +187,7 @@ class FrontierExploreNode(Node):
         cells = set(zip(*np.nonzero(frontier)))
         visited: set[tuple[int, int]] = set()
         clusters = []
+        clearance_cells = max(1, math.ceil(self._min_obstacle_clearance / res))
         for start in cells:
             if start in visited:
                 continue
@@ -161,10 +205,29 @@ class FrontierExploreNode(Node):
                             queue.append(neighbor)
             if len(component) < self._min_frontier_size:
                 continue
-            cy = sum(p[0] for p in component) / len(component)
-            cx = sum(p[1] for p in component) / len(component)
+
+            mean_cy = sum(p[0] for p in component) / len(component)
+            mean_cx = sum(p[1] for p in component) / len(component)
+            cy, cx = min(component, key=lambda p: (p[0] - mean_cy) ** 2 + (p[1] - mean_cx) ** 2)
+
+            if not self._has_clearance(cy, cx, occupied, clearance_cells):
+                continue
+
             clusters.append((ox + (cx + 0.5) * res, oy + (cy + 0.5) * res, len(component)))
         return clusters
+
+    @staticmethod
+    def _has_clearance(cy: int, cx: int, occupied: np.ndarray, clearance_cells: int) -> bool:
+        """True if no occupied cell lies within clearance_cells of (cy, cx)."""
+        h, w = occupied.shape
+        y0, y1 = max(0, cy - clearance_cells), min(h, cy + clearance_cells + 1)
+        x0, x1 = max(0, cx - clearance_cells), min(w, cx + clearance_cells + 1)
+        window = occupied[y0:y1, x0:x1]
+        if not window.any():
+            return True
+        oy_idx, ox_idx = np.nonzero(window)
+        dists = np.hypot(oy_idx + y0 - cy, ox_idx + x0 - cx)
+        return bool(dists.min() > clearance_cells)
 
     def _pick_goal(self, pose: tuple[float, float, float]) -> tuple[float, float] | None:
         px, py, yaw = pose
@@ -227,6 +290,18 @@ class FrontierExploreNode(Node):
                 return
             self._found_any_frontier = True
 
+            dist_to_robot = math.hypot(goal[0] - pose[0], goal[1] - pose[1])
+            if dist_to_robot < self._min_nav_distance:
+                self.get_logger().info(
+                    f"Frontier at {goal} is only {dist_to_robot:.2f}m away -- "
+                    "already effectively covered by the robot's current sensor "
+                    "range; skipping Nav2 navigation and blacklisting instead "
+                    "of triggering DWB's near-goal rotation-only phase over "
+                    "almost no distance."
+                )
+                self._blacklist.append(goal)
+                continue
+
             if self._last_visited_goal is not None and math.hypot(
                 goal[0] - self._last_visited_goal[0], goal[1] - self._last_visited_goal[1]
             ) < self._blacklist_radius:
@@ -242,7 +317,9 @@ class FrontierExploreNode(Node):
             goal_pose.header.stamp = self.get_clock().now().to_msg()
             goal_pose.pose.position.x = goal[0]
             goal_pose.pose.position.y = goal[1]
-            goal_pose.pose.orientation.w = 1.0
+            goal_yaw = math.atan2(goal[1] - pose[1], goal[0] - pose[0])
+            goal_pose.pose.orientation.z = math.sin(goal_yaw / 2.0)
+            goal_pose.pose.orientation.w = math.cos(goal_yaw / 2.0)
             self.get_logger().info(f"Heading to frontier at ({goal[0]:.2f}, {goal[1]:.2f})")
             self._nav.goToPose(goal_pose)
 

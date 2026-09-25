@@ -1,7 +1,7 @@
 """Bringup (race) launch file.
 
-Composes the nodes owned by bot_motor, bot_ultrasonic, bot_safety, and
-bot_perception. This package intentionally contains no node
+Composes the nodes owned by bot_motor, bot_odometry, bot_safety, bot_imu,
+and bot_perception. This package intentionally contains no node
 implementations of its own -- see CLAUDE.md for why those live in
 separate per-concern packages. Sensor drivers (RPLIDAR, OAK-D) launch
 only if their packages are installed; missing drivers don't block launch.
@@ -23,7 +23,8 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetE
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, NotEqualsSubstitution
 from launch.conditions import IfCondition
-from launch_ros.actions import Node
+from launch_ros.actions import Node, LoadComposableNodes
+from launch_ros.descriptions import ComposableNode
 
 
 def generate_launch_description():
@@ -70,6 +71,39 @@ def generate_launch_description():
             default_value='true',
             description='Launch RViz2 with the Nav2 default view',
         ),
+        DeclareLaunchArgument(
+            'nav2_params_file',
+            default_value='nav2_params.yaml',
+            description=(
+                'Filename (relative to bot_bringup/config, not a path) of '
+                'the Nav2 params file to load -- swap to A/B test planner/'
+                'controller alternatives without editing this launch file, '
+                'e.g. nav2_params_thetastar.yaml, nav2_params_smac_lattice.yaml, '
+                'nav2_params_mppi.yaml. See CLAUDE.md\'s Nav2 planner/'
+                'controller comparison section.'
+            ),
+        ),
+
+        # Course/lap count for bot_navigation's lap_navigator_node, which
+        # sends Nav2 the race route once bot_perception's start_trigger_node
+        # detects the vision start signal. Default here must match
+        # gazebo_sim.launch.py's own default 'world' arg -- bringup.launch.py
+        # doesn't currently forward a 'world' launch arg through to Gazebo,
+        # so keep these in sync by hand if that ever changes.
+        DeclareLaunchArgument(
+            'course',
+            default_value='speed_course_cfr',
+            description=(
+                "Which course's checkpoints to race (see "
+                'bot_navigation/lap_navigator_node.py): speed_course_cfr or '
+                'obstacle_course_cfr.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'num_laps',
+            default_value='0',
+            description="Laps to run; 0 uses the course's own default (3 for speed, 2 for obstacle).",
+        ),
 
         # Set use_sim_time parameter when using simulation
         SetEnvironmentVariable(
@@ -96,21 +130,24 @@ def generate_launch_description():
         #     output="screen",
         # ),
         # Node(
-        #     package="bot_ultrasonic",
-        #     executable="ultrasonic_node",
-        #     name="ultrasonic_node",
-        #     output="screen",
-        # ),
-        # Node(
         #     package="bot_motor",
         #     executable="motor_node",
         #     name="motor_node",
         #     output="screen",
         # ),
+        # wheel_odom_node also owns the Teensy's ultrasonic reporting now
+        # (see teensy_ws and bot_odometry's own docstring) -- there is no
+        # separate ultrasonic node/package anymore.
         # Node(
-        #     package="bot_perception",
-        #     executable="start_trigger_node",
-        #     name="start_trigger_node",
+        #     package="bot_odometry",
+        #     executable="wheel_odom_node",
+        #     name="wheel_odom_node",
+        #     output="screen",
+        # ),
+        # Node(
+        #     package="bot_imu",
+        #     executable="bno055_node",
+        #     name="bno055_node",
         #     output="screen",
         # ),
         # Node(
@@ -119,6 +156,53 @@ def generate_launch_description():
         #     name="sensor_fusion_node",
         #     output="screen",
         # ),
+
+        # Vision-based autonomous start trigger (bot_perception) -- runs in
+        # both sim and on real hardware, unlike the Pi-only nodes above.
+        # Two variants because the image topic differs: sim's generic
+        # camera sensor bridges to /camera/image_raw (bot.urdf.xacro's
+        # camera_sensor, see gazebo_sim.launch.py's bridge list), while
+        # real hardware's depthai_ros_driver publishes on /oak/rgb/image_raw
+        # (start_trigger_node's own default, left unset here). It only
+        # detects the signal and publishes start_signal -- lap_navigator_node
+        # below is what actually sends Nav2 the route.
+        Node(
+            package='bot_perception',
+            executable='start_trigger_node',
+            name='start_trigger_node',
+            output='screen',
+            condition=IfCondition(LaunchConfiguration('use_sim')),
+            parameters=[{
+                'image_topic': '/camera/image_raw',
+                'use_sim_time': True,
+            }],
+        ),
+        Node(
+            package='bot_perception',
+            executable='start_trigger_node',
+            name='start_trigger_node',
+            output='screen',
+            condition=IfCondition(NotEqualsSubstitution(LaunchConfiguration('use_sim'), 'true')),
+            parameters=[{
+                'use_sim_time': False,
+            }],
+        ),
+
+        # Multi-lap course navigator (bot_navigation) -- subscribes to
+        # start_trigger_node's start_signal and sends Nav2 the checkpoint
+        # route for 'course' once it fires. Runs in both sim and on real
+        # hardware; no image-topic split needed since it only talks to Nav2.
+        Node(
+            package='bot_navigation',
+            executable='lap_navigator_node',
+            name='lap_navigator_node',
+            output='screen',
+            parameters=[{
+                'course': LaunchConfiguration('course'),
+                'num_laps': LaunchConfiguration('num_laps'),
+                'use_sim_time': LaunchConfiguration('use_sim'),
+            }],
+        ),
     ]
 
     # RPLidar driver - only if package is installed and not in sim mode
@@ -138,16 +222,58 @@ def generate_launch_description():
             )
         )
 
-    # OAK-D S2 driver - only if package is installed and not in sim mode
+    # OAK-D S2 driver - only if package is installed and not in sim mode.
+    # 'oak_d_lite_launch.py' (the previous filename here) doesn't exist in
+    # depthai_ros_driver -- 'camera.launch.py' is the real generic launch
+    # file (see /opt/ros/jazzy/share/depthai_ros_driver/launch/). It also
+    # never had params_file wired to this package's own oak_params.yaml
+    # before, so that config was dead.
+    oak_condition = IfCondition(NotEqualsSubstitution(
+        LaunchConfiguration('use_sim'), 'true'
+    ))
     if oak_available:
         actions.append(
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
-                    PathJoinSubstitution([pkg_oak, 'launch', 'oak_d_lite_launch.py'])
+                    PathJoinSubstitution([pkg_oak, 'launch', 'camera.launch.py'])
                 ),
-                condition=IfCondition(NotEqualsSubstitution(
-                    LaunchConfiguration('use_sim'), 'true'
-                )),
+                condition=oak_condition,
+                launch_arguments={
+                    'name': 'oak',
+                    'camera_model': 'OAK-D-S2',
+                    'params_file': PathJoinSubstitution([pkg_bringup, 'config', 'oak_params.yaml']),
+                    # Skip the RGB rectify pipeline -- not needed for the
+                    # depth-only point cloud below, and CLAUDE.md's hardware
+                    # notes call for the host to receive depth (and, later,
+                    # on-device detections), never raw/rectified RGB frames.
+                    'rectify_rgb': 'false',
+                }.items(),
+            )
+        )
+
+        # Depth -> point cloud for the local costmap's voxel_layer (see
+        # nav2_params.yaml). depthai_ros_driver's own built-in point cloud
+        # path (the 'pointcloud.enable' launch arg above) only produces a
+        # colorized cloud via PointCloudXyzrgbNode, which requires the RGB
+        # stream -- exactly the raw-frame path CLAUDE.md says to avoid. Using
+        # depth_image_proc's XYZ-only node against the depth image directly
+        # avoids pulling RGB into this at all. Loads into the same component
+        # container camera.launch.py just created ('<name>_container').
+        actions.append(
+            LoadComposableNodes(
+                target_container='/oak_container',
+                condition=oak_condition,
+                composable_node_descriptions=[
+                    ComposableNode(
+                        package='depth_image_proc',
+                        plugin='depth_image_proc::PointCloudXyzNode',
+                        name='oak_points_node',
+                        remappings=[
+                            ('image_rect', 'oak/stereo/image_raw'),
+                            ('points', 'oak/points'),
+                        ],
+                    ),
+                ],
             )
         )
 
@@ -188,19 +314,21 @@ def generate_launch_description():
                     'slam': 'False',
                     'map': PathJoinSubstitution([pkg_bringup, 'config', 'maps', 'map.yaml']),
                     'use_sim_time': LaunchConfiguration('use_sim'),
-                    'params_file': PathJoinSubstitution([pkg_bringup, 'config', 'nav2_params.yaml']),
+                    'params_file': PathJoinSubstitution([pkg_bringup, 'config', LaunchConfiguration('nav2_params_file')]),
                     'autostart': 'true',
                 }.items(),
             )
         )
 
-        # RViz2 with Nav2's default view (robot model, TF, costmaps, and the
-        # panel for sending 2D Nav Goals) - only if nav2_bringup is installed
+        # RViz2 with this package's own view (robot model, TF, costmaps, the
+        # panel for sending 2D Nav Goals, a ThirdPersonFollower camera that
+        # actually tracks base_link, and the OAK-D depth point cloud) rather
+        # than nav2_bringup's stock nav2_default_view.rviz.
         actions.append(
             Node(
                 package='rviz2',
                 executable='rviz2',
-                arguments=['-d', PathJoinSubstitution([pkg_nav2, 'rviz', 'nav2_default_view.rviz'])],
+                arguments=['-d', PathJoinSubstitution([pkg_bringup, 'launch', 'thirdpersonviewer.rviz'])],
                 parameters=[{'use_sim_time': LaunchConfiguration('use_sim')}],
                 condition=IfCondition(LaunchConfiguration('rviz')),
                 output='screen',

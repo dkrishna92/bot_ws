@@ -1,22 +1,22 @@
-depthai:
-  oak_d_lite_node:
-    ros__parameters:
-      device_type: "OAK-D-S2"
-      usb_port_id: ""
-      camera_i_stereo_depth_align: "rgb"
-
-      # RGB camera
-      rgb_stereo_node_xout_rgb: "rgb"
-      spatial_detection_node_input_stereo_depth: "stereo_depth"
-
-      # Depth
-      stereo_depth_node_preset: "HighDensity"
-
-      # Publishing
-      publish_tf: true
-      tf_prefix: "oak"
-      camera_model: "OAK-D"
-
-      # Frame IDs
-      rgb_camera_optical_frame: "oak_rgb_camera_optical_frame"
-      stereo_depth_frame: "oak_stereo_depth_frame"
+# depthai_ros_driver (installed: ros-jazzy-depthai-ros-driver 2.12.2) matches
+# this file's top-level key against the node's fully-qualified name. This is
+# now launched by bringup.launch.py's camera.launch.py include with
+# name:=oak and no namespace, so the resolved name is "/oak". The previous
+# "depthai: oak_d_lite_node:" nesting here never matched that (and this file
+# was never even passed as a params_file from the launch), so none of it
+# ever reached the node. Parameter names/nesting below follow this driver
+# version's actual i_-prefixed, per-sensor-group schema -- see
+# /opt/ros/jazzy/share/depthai_ros_driver/config/{camera,rgbd,pcl}.yaml for
+# the reference examples this was checked against.
+/oak:
+  ros__parameters:
+    camera:
+      i_pipeline_type: RGBD
+      i_nn_type: none
+      i_enable_imu: true
+    stereo:
+      # Depth registered into the RGB camera's optical frame -- matches
+      # rgb_camera_optical_frame framing assumed elsewhere (e.g. IMU/EKF
+      # frame notes in CLAUDE.md).
+      i_align_depth: true
+      i_subpixel: true

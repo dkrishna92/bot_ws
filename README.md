@@ -20,7 +20,7 @@ at the workspace root for the full architecture context and decision log.
 The project deliberately keeps middleware concerns separate from robot logic:
 
 - The ROS 2 middleware layer is the default RMW (Fast DDS or Cyclone DDS), not a custom message bus or ZeroMQ stack.
-- Driver and control code lives in per-concern packages such as `bot_motor`, `bot_ultrasonic`, `bot_safety`, and `bot_perception`.
+- Driver and control code lives in per-concern packages such as `bot_motor`, `bot_odometry`, `bot_safety`, `bot_imu`, and `bot_perception`.
 - Hardware logic stays in those node implementations; launch files only compose the graph and do not contain robot behavior.
 - The safety MCU and Linux/ROS stack remain intentionally separate, with the MCU handling the hard real-time e-stop cutoff and ROS nodes handling higher-level monitoring and planning.
 
@@ -92,8 +92,10 @@ sudo apt install ros-jazzy-rplidar-ros ros-jazzy-depthai-ros-driver
   - `/oak/rgb/image_raw` (sensor_msgs/Image) — RGB frames
   - `/oak/stereo/depth` (sensor_msgs/Image) — depth map (uint16, mm)
   - Spatial detection output (varies by detection model)
-- **Usage**: start_trigger_node detects vision-based race start; sensor_fusion_node
-  converts depth to 3D points for obstacle representation
+- **Usage**: start_trigger_node watches this feed for the start signal
+  flipping red->green and triggers the race start (see "Vision-based start
+  signal" below); sensor_fusion_node converts depth to 3D points for
+  obstacle representation
 - **Config**: [config/oak_params.yaml](config/oak_params.yaml)
 
 ### Sensor Fusion
@@ -139,6 +141,64 @@ sudo apt install ros-jazzy-nav2-bringup ros-jazzy-robot-localization
 ```
 
 Both packages are optional—launch proceeds without them if not installed (useful for laptop development).
+
+### Comparing planner/controller alternatives (development tool)
+
+An in-progress A/B comparison against the current NavFn/DWB config is
+underway — see `CLAUDE.md`'s "Nav2 planner/controller comparison" section
+for what's being compared and why. This is a development tool for tuning,
+not part of the race-day or mapping workflow itself:
+
+```bash
+scripts/run_nav2_variant_test.sh race --all      # race/bringup variants
+scripts/run_nav2_variant_test.sh mapping --all   # mapping/frontier-exploration variants
+```
+
+Or launch a single variant manually with
+`ros2 launch bot_bringup bringup.launch.py use_sim:=true nav2_params_file:=<variant>.yaml`
+(swap `bringup.launch.py` for `mapping.launch.py` and the `nav2_params_`
+prefix for `nav2_mapping_params_` for the mapping-side variants).
+
+## Vision-based start signal
+
+The competition requires an autonomous, vision-triggered race start (a
+manual trigger costs a 5s time penalty). `bot_perception`'s
+`start_trigger_node` watches the OAK-D's RGB feed for the course's start
+signal flipping from red to green (debounced over a few consecutive
+frames to reject a flicker/false read), then sends Nav2 a
+`NavigateToPose` goal directly to get the robot moving.
+
+- **Real hardware**: subscribes to `/oak/rgb/image_raw` (the node's
+  default `image_topic`).
+- **Sim**: subscribes to `/camera/image_raw` (`bot_gazebo`'s simulated
+  camera) — `bringup.launch.py` picks the right topic automatically based
+  on `use_sim`.
+- **Goal pose**: pass `goal_x`, `goal_y`, `goal_yaw` (radians, `map`
+  frame) to `bringup.launch.py`. No real course waypoints exist yet, so
+  these default to NaN — if left unset, the node still detects/latches
+  the signal but logs an error and skips sending a goal rather than
+  driving toward an undefined point.
+
+```bash
+ros2 launch bot_bringup bringup.launch.py use_sim:=true \
+  goal_x:=14.0 goal_y:=4.75 goal_yaw:=3.14159265
+```
+
+### Simulating the start signal in Gazebo
+
+`speed_course_cfr`/`obstacle_course_cfr` include a physical start-signal
+model (`start_signal_arms`) — a red/green paddle on a revolute joint,
+commanded over `/start_signal/arm`. `scripts/start_signal.py` drives it,
+simulating a race official flipping the signal, so the full
+detect → trigger → drive path can be tested end to end against an
+already-launched `bringup.launch.py use_sim:=true`:
+
+```bash
+python3 scripts/start_signal.py                     # red->green after a fixed 5s delay
+python3 scripts/start_signal.py --delay 8            # fixed delay, custom
+python3 scripts/start_signal.py --randomize          # random 3-8s delay (unpredictable, like a real official)
+python3 scripts/start_signal.py --randomize --min-delay 2 --max-delay 10
+```
 
 ## Status
 

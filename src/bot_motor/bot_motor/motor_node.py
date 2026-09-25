@@ -42,7 +42,7 @@ class MotorNode(Node):
         self.declare_parameter("pwm_frequency_hz", 20000)
         self.declare_parameter("max_duty_cycle", 0.9)
         self.declare_parameter("cmd_vel_timeout_s", 0.3)
-        self.declare_parameter("track_width_m", 0.28)
+        self.declare_parameter("track_width_m", 0.32)
         self.declare_parameter("max_linear_speed_mps", 2.0)
         self.declare_parameter("channel_a_pwm_pin", 12)
         self.declare_parameter("channel_a_dir_pin", 5)

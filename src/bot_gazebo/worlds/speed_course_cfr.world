@@ -9,10 +9,21 @@
     <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
     <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
     <!-- Required for contact sensors (e.g. bot's diagnostic base_contact_sensor)
-         to produce any output at all -- unlike camera/lidar, they are not
+         to produce any output at all  unlike camera/lidar, they are not
          handled by gz-sim-sensors-system. -->
     <plugin filename="gz-sim-contact-system" name="gz::sim::systems::Contact"/>
-    <!-- cfr:sensors-system -->
+    <!-- Same story as contact sensors: IMU is its own system, not part of
+         gz-sim-sensors-system, even though it's not a rendering sensor
+         either. Required for bot's imu_link sensor (see bot.urdf.xacro) to
+         publish anything. -->
+    <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
+    <!-- This was previously just a stray "cfr:sensors-system" placeholder
+         comment with no actual plugin: camera/lidar (both handled by
+         this system, unlike contact/IMU above) silently produced nothing
+         at all on this world. -->
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
 
     <light type="directional" name="sun">
       <pose>0 0 20 0 0 0</pose>
@@ -442,7 +453,15 @@
     <model name="start_signal_frame"><static>true</static><pose>17.0116 3.8895 0 0 0 1.57080</pose>
       <link name="link">
         <visual name="frame_visual"><pose>0.0000 0.0000 0.0000 0.0000 0.0000 0.0000</pose><geometry><mesh><uri>model://cfr_arduino_bridge/meshes/start_signal_frame.stl</uri></mesh></geometry><material><diffuse>0.00 0.64 0.92 1</diffuse></material></visual>
-        <collision name="post_collision"><pose>0 0 0.61 0 0 0</pose><geometry><box><size>0.813 0.10 1.219</size></box></geometry></collision>
+        <!-- Two side posts, NOT one solid slab. The frame is an open gate the
+             robot drives through; the old single 0.813-wide box collision
+             walled off the whole opening (invisible vs the open-arch visual),
+             blocking the start and painting a phantom wall into the lidar map
+             / global costmap right in front of the spawn. Post x-offsets are
+             inferred from the old box's 0.813 span; eyeball against the
+             frame mesh in the GUI once loaded. -->
+        <collision name="post_left_collision"><pose>0.3565 0 0.61 0 0 0</pose><geometry><box><size>0.10 0.10 1.219</size></box></geometry></collision>
+        <collision name="post_right_collision"><pose>-0.3565 0 0.61 0 0 0</pose><geometry><box><size>0.10 0.10 1.219</size></box></geometry></collision>
       </link>
     </model>
     <model name="start_signal_arms">

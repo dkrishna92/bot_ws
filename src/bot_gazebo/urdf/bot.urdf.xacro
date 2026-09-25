@@ -2,15 +2,21 @@
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="bot">
 
   <!-- Constants -->
-  <xacro:property name="base_length" value="0.45"/>  <!-- 17.7 inches -->
-  <xacro:property name="base_width" value="0.27"/>   <!-- 10.6inches -->
-  <xacro:property name="base_height" value="0.176"/>  <!-- chassis height -->
-  <xacro:property name="wheel_radius" value="0.12"/>  <!-- wheel radius -->
-  <xacro:property name="wheel_width" value="0.06"/>  <!-- wheel width -->
-  <xacro:property name="wheelbase" value="0.33"/>    <!-- distance between wheels -->
-  <xacro:property name="track_width" value="0.22"/>  <!-- width between wheel centers -->
-  <xacro:property name="mass_base" value="3.2"/>    <!-- 7 lbs  -->
-  <xacro:property name="mass_wheel" value="0.2"/>
+  <xacro:property name="base_length" value="0.445"/>  <!-- 0.445 m = 17.5 in -->
+  <xacro:property name="base_width" value="0.255"/>   <!-- 0.255 m = 10.0 in -->
+  <xacro:property name="base_height" value="0.176"/>  <!-- chassis height, 0.176 m = 6.9 in -->
+  <!-- Gap between the ground and the underside of the chassis (0.06 m =
+       2.4 in). Without it the chassis box was modelled spanning
+       z=0..base_height, i.e. sitting flat on the floor rather than riding
+       on the wheels. That is wrong on its own terms, though it was not
+       what blocked turning: see the wheel friction block below for that. -->
+  <xacro:property name="ground_clearance" value="0.06"/>
+  <xacro:property name="wheel_radius" value="0.06"/>  <!-- 0.06 m = 2.4 in radius (4.7 in dia) -->
+  <xacro:property name="wheel_width" value="0.06"/>  <!-- 0.06 m = 2.4 in -->
+  <xacro:property name="wheelbase" value="0.33"/>    <!-- front-to-rear axle spacing, 0.33 m = 13.0 in -->
+  <xacro:property name="track_width" value="0.32"/>  <!-- left-to-right wheel-centre spacing, 0.32 m = 12.6 in -->
+  <xacro:property name="mass_base" value="3.2"/>    <!-- 3.2 kg = 7.0 lb -->
+  <xacro:property name="mass_wheel" value="0.2"/>   <!-- 0.2 kg = 0.44 lb each -->
 
   <!-- Base Link (Chassis) -->
   <link name="base_link">
@@ -20,7 +26,7 @@
       <inertia ixx="0.3" ixy="0" ixz="0" iyy="0.5" iyz="0" izz="0.3"/>
     </inertial>
     <visual>
-      <origin xyz="0 0 ${base_height/2}" rpy="0 0 0"/>
+      <origin xyz="0 0 ${ground_clearance + base_height/2}" rpy="0 0 0"/>
       <geometry>
         <box size="${base_length} ${base_width} ${base_height}"/>
       </geometry>
@@ -28,8 +34,8 @@
         <color rgba="0.2 0.2 0.8 1.0"/>  <!-- Blue -->
       </material>
     </visual>
-    <collision>
-      <origin xyz="0 0 ${base_height/2}" rpy="0 0 0"/>
+    <collision name="base_collision">
+      <origin xyz="0 0 ${ground_clearance + base_height/2}" rpy="0 0 0"/>
       <geometry>
         <box size="${base_length} ${base_width} ${base_height}"/>
       </geometry>
@@ -80,8 +86,37 @@
 
     <gazebo reference="${prefix}_wheel">
       <material>Gazebo/Black</material>
-      <mu1>0.8</mu1>
-      <mu2>0.8</mu2>
+      <!-- Anisotropic tyre friction. This is what makes skid-steer
+           pivoting possible at all: a 4-wheel skid-steer can only rotate
+           by scrubbing all four tyres sideways, so lateral friction (mu1,
+           along fdir1) is low while rolling traction (mu2) stays high.
+
+           fdir1 is the WHEEL AXLE direction, but written as "0 0 1"
+           because fdir1 is expressed in the COLLISION frame and the
+           collision above is rotated rpy="pi/2 0 0", which maps the link's
+           Y axis onto the collision's Z. Getting this wrong is not a
+           subtle inaccuracy, it silently disables the whole friction
+           split: "0 1 0" here points along the contact normal, which is
+           degenerate, so the engine discards it and picks an arbitrary
+           direction. With that (and with the earlier isotropic 0.8/0.8)
+           the robot could not rotate AT ALL: a commanded 1.0 rad/s gave
+           exactly 0 deg of yaw while the wheels counter-rotated correctly,
+           so wheel odometry integrated turns that never happened and
+           heading was lost at every turn. With fdir1 correct, a 10s pivot
+           at 1.0 rad/s yields ~443 deg of real rotation.
+
+           The axle is also the only spin-invariant axis to aim fdir1
+           along: the wheel link rotates about it, so the friction split
+           stays put instead of tumbling with the wheel.
+
+           No <slip1>/<slip2> are set. They are not needed here: the
+           anisotropy alone reproduces realistic scrub (wheel odometry
+           over-reports a pivot by ~28%, which is why ekf_params.yaml gives
+           yaw to the IMU rather than the wheels). Add slip compliance only
+           if tyre modelling needs to get finer. -->
+      <mu1>0.05</mu1>
+      <mu2>1.0</mu2>
+      <fdir1>0 0 1</fdir1>
     </gazebo>
   </xacro:macro>
 
@@ -138,9 +173,40 @@
     </collision>
   </link>
 
+  <!-- IMU Link -->
+  <link name="imu_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.05"/>
+      <inertia ixx="0.00001" ixy="0" ixz="0" iyy="0.00001" iyz="0" izz="0.00001"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.02 0.02 0.01"/>
+      </geometry>
+      <material name="imu_color">
+        <color rgba="0.9 0.1 0.1 1.0"/>  <!-- Red -->
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.02 0.02 0.01"/>
+      </geometry>
+    </collision>
+  </link>
+
   <!-- Lidar Joint -->
   <joint name="lidar_joint" type="fixed">
-    <origin xyz="0 0 ${base_height + 0.06}" rpy="0 0 0"/>
+    <!-- 0.1143m = 4.5in above the ground, matching the RPLIDAR's planned
+         mount height on the real robot. base_link's origin is at ground
+         level (wheels are radius 0.12 centred at z=0.12, so they touch the
+         floor), so this z IS the height above ground directly. Mounting
+         this low is safe despite the 360-degree scan: the wheels (~0.11m
+         out) and chassis body are both inside the sensor's 0.3m
+         <range><min> dead zone, so they never produce self-returns. -->
+    <origin xyz="0 0 0.1143" rpy="0 0 0"/>
     <parent link="base_link"/>
     <child link="lidar_link"/>
   </joint>
@@ -152,6 +218,16 @@
     <child link="camera_link"/>
   </joint>
 
+  <!-- IMU Joint, mounted flush at the chassis center (no offset needed
+       the way lidar/camera need clearance/forward placement), x-forward
+       z-up matching base_link's own axes so imu_link's orientation
+       readings need no extra rotation to interpret in base_link/odom. -->
+  <joint name="imu_joint" type="fixed">
+    <origin xyz="0 0 ${base_height/2}" rpy="0 0 0"/>
+    <parent link="base_link"/>
+    <child link="imu_link"/>
+  </joint>
+
   <!-- Gazebo plugins -->
   <gazebo reference="base_link">
     <material>Gazebo/Blue</material>
@@ -160,18 +236,66 @@
          directly instead of inferred from TF/cmd_vel mismatches. Requires
          the gz-sim-contact-system plugin to be loaded on the world (see
          bot_gazebo/worlds/*_cfr.world) - unlike camera/lidar, contact
-         sensors produce no output at all without it. "collision" is
-         sdformat_urdf's default generated name for base_link's single,
-         unnamed URDF <collision> element; if this sensor stays silent,
-         verify the real name via `gz topic -l | grep contact`.
+         sensors produce no output at all without it. The referenced
+         collision name must match base_link's <collision name="...">
+         above: sdformat_urdf does NOT name an unnamed URDF collision
+         "collision" (it uses <link>_collision), so the name is set
+         explicitly on both sides to avoid a silent no-match.
          An explicit <topic> avoids having to guess gz-sim's auto-generated
          hierarchical topic name when bridging in gazebo_sim.launch.py. -->
     <sensor name="base_contact_sensor" type="contact">
       <contact>
-        <collision>collision</collision>
+        <collision>base_collision</collision>
         <topic>/bot_contacts</topic>
       </contact>
       <update_rate>30</update_rate>
+    </sensor>
+  </gazebo>
+
+  <!-- IMU sensor (real part: Bosch BNO055) - feeds robot_localization's EKF
+       (see bot_bringup/config/ekf_params.yaml) so heading is tracked from
+       gyro/orientation between SLAM scan-match corrections, not just wheel
+       odometry. Requires the gz-sim-imu-system plugin loaded on the world
+       (see bot_gazebo/worlds/*_cfr.world) - same story as the contact
+       sensor above, it produces no output at all without it.
+
+       Noise stddevs below are approximated from the BNO055 datasheet's
+       noise-density specs (gyro ~0.014 deg/s/sqrt(Hz), accel ~150
+       ug/sqrt(Hz)), converted to a per-sample stddev at this sensor's
+       100Hz update_rate via stddev = density * sqrt(update_rate/2). This
+       is a standard approximation (treats the sensor as white noise
+       band-limited to Nyquist), not a substitute for validating against
+       the actual datasheet or real-hardware calibration once the BNO055
+       is mounted - see CLAUDE.md's open items. gz-sim's IMU sensor has no
+       way to attach noise/covariance to the orientation output itself
+       (only angular_velocity/linear_acceleration below); its
+       orientation_covariance will read back all-zero regardless. -->
+  <gazebo reference="imu_link">
+    <sensor name="imu_sensor" type="imu">
+      <!-- Same reason as the lidar/camera sensors: without this the
+           bridged message carries gz's scoped sensor name
+           ("bot/base_link/imu_sensor") as its frame_id. That frame is not
+           in the TF tree, so robot_localization cannot transform the IMU
+           into base_link and silently DROPS every sample: the EKF's yaw
+           then sat at 0 while the IMU itself was correctly reporting the
+           turn, which is the whole reason imu0 exists in
+           ekf_params.yaml. -->
+      <gz_frame_id>imu_link</gz_frame_id>
+      <always_on>true</always_on>
+      <update_rate>100</update_rate>
+      <topic>/imu</topic>
+      <imu>
+        <angular_velocity>
+          <x><noise type="gaussian"><mean>0.0</mean><stddev>0.0017</stddev></noise></x>
+          <y><noise type="gaussian"><mean>0.0</mean><stddev>0.0017</stddev></noise></y>
+          <z><noise type="gaussian"><mean>0.0</mean><stddev>0.0017</stddev></noise></z>
+        </angular_velocity>
+        <linear_acceleration>
+          <x><noise type="gaussian"><mean>0.0</mean><stddev>0.0104</stddev></noise></x>
+          <y><noise type="gaussian"><mean>0.0</mean><stddev>0.0104</stddev></noise></y>
+          <z><noise type="gaussian"><mean>0.0</mean><stddev>0.0104</stddev></noise></z>
+        </linear_acceleration>
+      </imu>
     </sensor>
   </gazebo>
 
@@ -189,7 +313,14 @@
       <right_joint>rear_right_wheel_joint</right_joint>
       <wheel_separation>${track_width}</wheel_separation>
       <wheel_radius>${wheel_radius}</wheel_radius>
-      <max_wheel_torque>20</max_wheel_torque>
+      <!-- Real motor: Pololu #4843, 20.4:1 25D 12V HP gearmotor. Extrapolated
+           stall torque is 7.4 kg-cm (~0.73 N-m) per wheel; the previous 20
+           N-m here was a placeholder ~27x too high, letting sim pivot-turns
+           succeed unrealistically easily in-place skid-steer rotation
+           needs torque in roughly this same 0.6-0.9 N-m range just to
+           overcome scrub friction (see CLAUDE.md), so this is a genuinely
+           load-bearing limit now, not a formality. -->
+      <max_wheel_torque>0.73</max_wheel_torque>
       <max_linear_acceleration>1.0</max_linear_acceleration>
       <topic>cmd_vel</topic>
       <odom_topic>odom</odom_topic>
@@ -200,8 +331,40 @@
     <!-- Publishes joint positions on gz-transport so robot_state_publisher
          can compute base_link -> *_wheel TF. Without this the wheel joints
          are non-fixed (continuous) but nothing reports their position, so
-         robot_state_publisher has nothing to publish their transform from. -->
-    <plugin filename="gz-sim-joint-state-publisher-system" name="gz::sim::systems::JointStatePublisher"/>
+         robot_state_publisher has nothing to publish their transform from.
+         Explicit <topic> pins a fixed name instead of the default
+         /world/<world>/model/<model>/joint_state, whose <world> segment is
+         the world file's INTERNAL name (e.g. cfr_speed_course), not its
+         filename/launch-arg (speed_course_cfr), bridging the auto name
+         would silently miss, leaving no wheel links in TF. -->
+    <plugin filename="gz-sim-joint-state-publisher-system" name="gz::sim::systems::JointStatePublisher">
+      <topic>joint_states</topic>
+    </plugin>
+
+    <!-- Ground-truth pose publisher, sim-only diagnostic, NOT part of the
+         real robot's sensor suite. DiffDrive's /odom above is kinematic
+         (integrated from wheel joint angle, zero-slip assumed), not physics
+         ground truth: if the chassis is wedged/colliding while the wheels
+         still spin, /odom over-reports displacement and slam_toolbox gets
+         fed a wrong believed pose. This publishes the model's actual
+         world-frame pose so scripts/compare_odom_to_ground_truth.py can
+         catch exactly that divergence, see the frontier exploration
+         investigation notes in CLAUDE.md. use_pose_vector_msg left at its
+         default (false); with one model and publish_model_pose the only
+         thing enabled, this publishes plain gz.msgs.Pose on
+         /model/bot/pose per the plugin's default topic-naming convention
+         (confirmed against /opt/.../gz-sim8/worlds/pose_publisher.sdf),
+         double check via `gz topic -l | grep bot` after first launch,
+         same as the contact sensor topic above. -->
+    <plugin filename="gz-sim-pose-publisher-system" name="gz::sim::systems::PosePublisher">
+      <publish_model_pose>true</publish_model_pose>
+      <publish_link_pose>false</publish_link_pose>
+      <publish_collision_pose>false</publish_collision_pose>
+      <publish_visual_pose>false</publish_visual_pose>
+      <publish_nested_model_pose>false</publish_nested_model_pose>
+      <static_publisher>false</static_publisher>
+      <update_frequency>30</update_frequency>
+    </plugin>
   </gazebo>
 
   <!-- Lidar Sensor (simulates RPLIDAR) - gz-sim gpu_lidar -->
@@ -231,6 +394,22 @@
           <max>12</max>
           <resolution>0.01</resolution>
         </range>
+        <!-- Excludes visuals tagged visibility_flags=1 (bit 0) - the
+             obstacle course's ramp/bridge/helix deck surfaces, see
+             obstacle_course_cfr.world. gpu_lidar renders the scene to
+             compute ranges (unlike the older CPU "ray"/"lidar" sensor
+             types, which raycast against physics collision instead), so
+             this visibility_mask/visibility_flags mechanism works here;
+             it has no effect on physics - the wheels still collide with
+             and climb the deck normally. Rail visuals are deliberately
+             left at the default (visible) so the local costmap still sees
+             them as lateral boundaries. Default mask is all-bits
+             (4294967295 = 0xFFFFFFFF); clearing bit 0
+             (4294967294 = 0xFFFFFFFE) makes this lidar blind to anything
+             tagged with only that bit, while every other visual (flags
+             still all-bits by default) keeps satisfying
+             (mask & flags) != 0 and stays visible as normal. -->
+        <visibility_mask>4294967294</visibility_mask>
       </lidar>
     </sensor>
   </gazebo>
@@ -256,6 +435,49 @@
       <update_rate>30</update_rate>
       <visualize>true</visualize>
       <topic>camera/image_raw</topic>
+    </sensor>
+
+    <!-- Depth Sensor (simulates the OAK-D S2's stereo depth output) -
+         gz-sim depth_camera, co-located with camera_sensor above since on
+         the real hardware both RGB and depth come off the same OAK-D S2
+         (stereo depth aligned into the RGB frame, per
+         bot_bringup/config/oak_params.yaml's stereo.i_align_depth: true).
+         gz-sim's depth_camera sensor auto-publishes a second topic at
+         "<topic>/points" (a PointCloudPacked) alongside the depth image on
+         "<topic>" itself, with no extra plugin needed - gazebo_sim.launch.py
+         bridges that points topic to /oak/points, matching the real-hardware
+         topic bringup.launch.py's depth_image_proc node publishes to. The
+         voxel_layer in nav2_params.yaml/nav2_mapping_params.yaml consumes
+         whichever one is live via that same /oak/points topic name. -->
+    <sensor name="oak_depth_sensor" type="depth_camera">
+      <!-- see the lidar sensor above for why this is needed -->
+      <gz_frame_id>camera_link</gz_frame_id>
+      <camera>
+        <horizontal_fov>1.0472</horizontal_fov>
+        <image>
+          <width>640</width>
+          <height>480</height>
+          <format>R_FLOAT32</format>
+        </image>
+        <clip>
+          <!-- OAK-D S2 stereo depth's usable range is roughly 0.2m-6m
+               (shorter/noisier than the RGB camera's clip above) - matches
+               voxel_layer's obstacle_max_range: 3.0 in nav2_params.yaml
+               with headroom rather than clipping right at it. -->
+          <near>0.2</near>
+          <far>6.0</far>
+        </clip>
+        <!-- Same ramp-deck exclusion as lidar_sensor above (see that
+             sensor's comment) - this is the voxel_layer's other
+             obstacle-marking source, so it needs the same treatment or the
+             deck would still get marked via /oak/points even with the
+             lidar fixed. camera_sensor (RGB, above) deliberately keeps the
+             default mask - no reason to hide the ramp from a plain image. -->
+        <visibility_mask>4294967294</visibility_mask>
+      </camera>
+      <always_on>true</always_on>
+      <update_rate>15</update_rate>
+      <topic>oak/depth</topic>
     </sensor>
   </gazebo>
 

@@ -49,8 +49,11 @@ slam_toolbox:
     # General Parameters
     use_scan_matching: true
     use_scan_barycenter: true
-    minimum_travel_distance: 0.5
-    minimum_travel_heading: 0.5
+    # 0.5/0.5 (rad) let too much odometry drift accumulate between scan-match
+    # corrections during fast teleop turning -- tightened so corrections
+    # happen more often, before drift exceeds the matcher's search space.
+    minimum_travel_distance: 0.2
+    minimum_travel_heading: 0.2
     check_min_dist_and_heading_precisely: false
     scan_buffer_size: 10
     scan_buffer_maximum_scan_distance: 10.0
@@ -59,9 +62,19 @@ slam_toolbox:
     loop_search_maximum_distance: 3.0
     do_loop_closing: true
     loop_match_minimum_chain_size: 10
-    loop_match_maximum_variance_coarse: 3.0
-    loop_match_minimum_response_coarse: 0.35
-    loop_match_minimum_response_fine: 0.45
+    # Tightened from 3.0/0.35/0.45 -- the two parallel bale lanes are only
+    # ~1.4m apart, well inside loop_search_maximum_distance above, so the
+    # far lane is a geometrically plausible (but wrong) loop-closure
+    # candidate. A straight bale wall also looks similar to another straight
+    # bale wall, so the previous thresholds let a mediocre cross-lane match
+    # through as if it were a genuine revisit, which is what was folding the
+    # two lanes into one. Raising the required match quality (response) and
+    # lowering the allowed positional uncertainty (variance) rejects that
+    # kind of plausible-but-wrong match while still accepting a real, tight
+    # loop closure (e.g. returning to the start after a full lap).
+    loop_match_maximum_variance_coarse: 1.0
+    loop_match_minimum_response_coarse: 0.55
+    loop_match_minimum_response_fine: 0.65
 
     # Correlation Parameters - Correlation Parameters
     correlation_search_space_dimension: 0.5

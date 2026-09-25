@@ -12,6 +12,20 @@ log/
 *.bag
 *.db3
 *.pcap
-*.log   
+*.log
 core.*
 *.txt
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.gv
+
+# Per-run local output from scripts/run_nav2_variant_test.sh -- not
+# something to commit, see CLAUDE.md's Nav2 planner/controller comparison
+# section.
+scripts/nav2_variant_results/
+
+# Per-run local output from scripts/measure_exploration_progress.py --
+# same rationale as nav2_variant_results/ above.
+scripts/exploration_results/

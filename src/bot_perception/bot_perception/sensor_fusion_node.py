@@ -3,7 +3,7 @@
 Subscribes to:
 - /scan (sensor_msgs/LaserScan) from rplidar_ros
 - /oak/rgb/image_raw (sensor_msgs/Image) from depthai_ros_driver
-- /oak/spatial_detections (... or spatial depth results)
+- /oak/stereo/image_raw (sensor_msgs/Image) - depthai_ros_driver's depth image
 
 Publishes:
 - /perception/obstacles (geometry_msgs/PointCloud) - fused 3D points from lidar + depth
@@ -21,18 +21,12 @@ from collections import deque
 import rclpy
 from rclpy.node import Node
 from rclpy.time import Time
-from sensor_msgs.msg import LaserScan, Image, PointCloud, PointField
+from sensor_msgs.msg import LaserScan, Image, PointCloud
 from geometry_msgs.msg import Point32
 from std_msgs.msg import Header
 from cv_bridge import CvBridge
-import cv2
 from tf2_ros import Buffer, TransformListener
 from tf2_ros import LookupException, ConnectivityException, ExtrapolationException
-
-try:
-    import depthai as dai
-except ImportError:
-    dai = None
 
 
 class SensorFusionNode(Node):
@@ -66,8 +60,11 @@ class SensorFusionNode(Node):
 
         self.create_subscription(LaserScan, "scan", self._on_scan, 10)
         self.create_subscription(Image, "/oak/rgb/image_raw", self._on_rgb, 10)
-        # Note: depth image subscribe would typically be to /oak/stereo/depth or similar
-        self.create_subscription(Image, "/oak/stereo/depth", self._on_depth, 10)
+        # /oak/stereo/image_raw is depthai_ros_driver's actual depth image
+        # topic -- it's the same topic bringup.launch.py feeds into
+        # depth_image_proc (remapped there as image_rect). An earlier
+        # /oak/stereo/depth here matched no real publisher.
+        self.create_subscription(Image, "/oak/stereo/image_raw", self._on_depth, 10)
 
         self.create_timer(0.1, self._fuse_and_publish)
 
@@ -187,9 +184,6 @@ class SensorFusionNode(Node):
         ]
 
         self._pub_pointcloud.publish(msg)
-
-    def destroy_node(self) -> None:
-        super().destroy_node()
 
 
 def main(args=None):

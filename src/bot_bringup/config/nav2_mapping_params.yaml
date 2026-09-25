@@ -109,21 +109,25 @@ controller_server:
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: true
-      max_vel_x: 0.5
+      # Slowed down from 0.5/1.0 (race-day values) specifically for
+      # exploration -- moving slower gives slam_toolbox more overlapping
+      # scans per unit distance, so it builds a cleaner map before the
+      # robot moves on to the next frontier.
+      max_vel_x: 0.1
       min_vel_x: 0.0
       max_vel_y: 0.0
       min_vel_y: 0.0
-      max_vel_theta: 1.0
+      max_vel_theta: 0.5
       min_speed_xy: 0.0
-      max_speed_xy: 0.5
+      max_speed_xy: 0.2
       min_speed_theta: 0.0
-      max_speed_theta: 1.0
-      acc_lim_x: 2.5
+      max_speed_theta: 0.5
+      acc_lim_x: 1.0
       acc_lim_y: 0.0
-      acc_lim_theta: 3.2
-      decel_lim_x: -2.5
+      acc_lim_theta: 1.5
+      decel_lim_x: -1.0
       decel_lim_y: 0.0
-      decel_lim_theta: -3.2
+      decel_lim_theta: -1.5
       vx_samples: 20
       vy_samples: 5
       vtheta_samples: 20
@@ -188,7 +192,7 @@ local_costmap:
       # this in sync with nav2_params.yaml's copy of this same comment if
       # base_width/base_length change again.
       robot_radius: 0.26
-      plugins: ["obstacle_layer", "inflation_layer"]
+      plugins: ["obstacle_layer", "voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
@@ -212,6 +216,26 @@ local_costmap:
           clearing: true
           marking: true
           data_type: "LaserScan"
+      # OAK-D S2 depth feed, alongside RPLIDAR's obstacle_layer above -- see
+      # nav2_params.yaml's copy of this comment for the full rationale.
+      voxel_layer:
+        plugin: "nav2_costmap_2d::VoxelLayer"
+        enabled: true
+        publish_voxel_map: true
+        origin_z: 0.0
+        z_resolution: 0.05
+        z_voxels: 16
+        max_obstacle_height: 1.0
+        mark_threshold: 0
+        observation_sources: oak_points
+        oak_points:
+          topic: /oak/points
+          data_type: "PointCloud2"
+          min_obstacle_height: 0.02
+          max_obstacle_height: 1.0
+          obstacle_max_range: 3.0
+          clearing: true
+          marking: true
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         enabled: true

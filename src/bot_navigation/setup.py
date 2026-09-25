@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = "bot_ultrasonic"
+package_name = "bot_navigation"
 
 setup(
     name=package_name,
@@ -14,11 +14,11 @@ setup(
     zip_safe=True,
     maintainer="Krishna",
     maintainer_email="krishna.dontaraju@gmail.com",
-    description="Ultrasonic sensor array node (HC-SR04-class, bit-banged GPIO)",
+    description="Multi-lap course/race logic: sends Nav2 the checkpoint route for the current course once the vision start signal fires.",
     license="Apache-2.0",
     entry_points={
         "console_scripts": [
-            "ultrasonic_node = bot_ultrasonic.ultrasonic_node:main",
+            "lap_navigator_node = bot_navigation.lap_navigator_node:main",
         ],
     },
 )
