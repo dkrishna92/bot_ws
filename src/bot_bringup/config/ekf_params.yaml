@@ -30,10 +30,28 @@ ekf_filter_node:
     # Odometry from the diff-drive plugin (sim) / motor_node (real hardware),
     # bridged to /odom. Yaw is deliberately NOT fused from here (index 5,
     # below) now that imu0 owns orientation -- see imu0 comment below for
-    # why. Position (x,y) and linear velocity (vx,vy) still come from wheel
-    # odometry; it has no drift-prone integration step for those.
+    # why.
+    #
+    # Only the linear VELOCITIES (vx, vy) are fused, not absolute position
+    # (x, y). An earlier version of this file fused x/y too, on the
+    # reasoning that position "has no drift-prone integration step" -- that
+    # was wrong, and it actively broke heading. Wheel-odometry x/y is
+    # integrated from wheel rotation *through the wheel-derived heading*,
+    # so on this skid-steer it inherits all the scrub error the IMU is here
+    # to avoid. Worse, gz's DiffDrive publishes /odom with an all-zero
+    # covariance, which robot_localization replaces with a near-zero value
+    # ("covariance at position (7) ... was zero" in its diagnostics),
+    # making the filter trust that corrupted position almost absolutely. It
+    # then rotated its yaw estimate to reconcile a position track that
+    # disagreed with the IMU, so the fused heading spun (~11 deg/s) even
+    # standing still, and lost heading badly through turns.
+    #
+    # Velocities are the quantity wheel encoders actually measure without
+    # an integration step, so they are what belongs here. Absolute position
+    # in the odom frame comes from integrating these against imu0's
+    # heading; the map-frame correction is amcl's job, not this filter's.
     odom0: odom
-    odom0_config: [true, true, false,
+    odom0_config: [false, false, false,
                    false, false, false,
                    true, true, false,
                    false, false, false,

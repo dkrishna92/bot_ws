@@ -207,6 +207,14 @@ def generate_launch_description():
                 # DiffDrive's kinematic /odom against physics ground truth
                 # (see that plugin's comment in bot.urdf.xacro).
                 '/model/bot/pose@geometry_msgs/msg/Pose[gz.msgs.Pose',
+                # Start signal arm command (ROS -> GZ only, ']') -- drives
+                # the start_signal_arms model's arm_joint (see the world
+                # files) via its gz-sim-joint-position-controller-system
+                # plugin. scripts/start_signal.py publishes here to flip
+                # the signal from red to green; bot_perception's
+                # start_trigger_node watches for that flip via the camera
+                # topics below, not this one.
+                '/start_signal/arm@std_msgs/msg/Float64]gz.msgs.Double',
             ],
             remappings=[
                 ('/oak/depth/points', '/oak/points'),

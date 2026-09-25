@@ -92,8 +92,10 @@ sudo apt install ros-jazzy-rplidar-ros ros-jazzy-depthai-ros-driver
   - `/oak/rgb/image_raw` (sensor_msgs/Image) — RGB frames
   - `/oak/stereo/depth` (sensor_msgs/Image) — depth map (uint16, mm)
   - Spatial detection output (varies by detection model)
-- **Usage**: start_trigger_node detects vision-based race start; sensor_fusion_node
-  converts depth to 3D points for obstacle representation
+- **Usage**: start_trigger_node watches this feed for the start signal
+  flipping red->green and triggers the race start (see "Vision-based start
+  signal" below); sensor_fusion_node converts depth to 3D points for
+  obstacle representation
 - **Config**: [config/oak_params.yaml](config/oak_params.yaml)
 
 ### Sensor Fusion
@@ -156,6 +158,57 @@ Or launch a single variant manually with
 `ros2 launch bot_bringup bringup.launch.py use_sim:=true nav2_params_file:=<variant>.yaml`
 (swap `bringup.launch.py` for `mapping.launch.py` and the `nav2_params_`
 prefix for `nav2_mapping_params_` for the mapping-side variants).
+
+## Vision-based start signal and lap navigation
+
+The competition requires an autonomous, vision-triggered race start (a
+manual trigger costs a 5s time penalty), and the speed/obstacle courses
+are multi-lap (3 laps / 2 laps respectively). Two nodes split this:
+
+- **`bot_perception`'s `start_trigger_node`** watches the OAK-D's RGB feed
+  for the course's start signal flipping from red to green (debounced
+  over a few consecutive frames to reject a flicker/false read), then
+  publishes a latched `start_signal` Bool. It only handles detection.
+  - **Real hardware**: subscribes to `/oak/rgb/image_raw` (the node's
+    default `image_topic`).
+  - **Sim**: subscribes to `/camera/image_raw` (`bot_gazebo`'s simulated
+    camera) — `bringup.launch.py` picks the right topic automatically
+    based on `use_sim`.
+- **`bot_navigation`'s `lap_navigator_node`** subscribes to `start_signal`
+  and, once it fires, sends Nav2 a single `NavigateThroughPoses` goal:
+  a small set of coarse per-lap checkpoints (see
+  `lap_navigator_node.py`'s `_COURSE_CHECKPOINTS`) repeated for the
+  course's lap count, letting Nav2's own global planner fill in the
+  actual route against the live costmap rather than following a
+  hand-traced path.
+  - `course` (`speed_course_cfr` or `obstacle_course_cfr`) and
+    `num_laps` (`0` = use the course's own default) are launch args.
+  - **The checkpoint positions are a best-effort derivation from the
+    imported CAD world geometry, not verified against the real course**
+    (see CLAUDE.md's open items — official course geometry is still
+    inaccessible). Eyeball/adjust them in the Gazebo GUI before trusting
+    this on race day.
+
+```bash
+ros2 launch bot_bringup bringup.launch.py use_sim:=true \
+  course:=obstacle_course_cfr num_laps:=2
+```
+
+### Simulating the start signal in Gazebo
+
+`speed_course_cfr`/`obstacle_course_cfr` include a physical start-signal
+model (`start_signal_arms`) — a red/green paddle on a revolute joint,
+commanded over `/start_signal/arm`. `scripts/start_signal.py` drives it,
+simulating a race official flipping the signal, so the full
+detect → trigger → drive path can be tested end to end against an
+already-launched `bringup.launch.py use_sim:=true`:
+
+```bash
+python3 scripts/start_signal.py                     # red->green after a fixed 5s delay
+python3 scripts/start_signal.py --delay 8            # fixed delay, custom
+python3 scripts/start_signal.py --randomize          # random 3-8s delay (unpredictable, like a real official)
+python3 scripts/start_signal.py --randomize --min-delay 2 --max-delay 10
+```
 
 ## Status
 

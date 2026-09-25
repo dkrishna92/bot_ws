@@ -84,6 +84,27 @@ def generate_launch_description():
             ),
         ),
 
+        # Course/lap count for bot_navigation's lap_navigator_node, which
+        # sends Nav2 the race route once bot_perception's start_trigger_node
+        # detects the vision start signal. Default here must match
+        # gazebo_sim.launch.py's own default 'world' arg -- bringup.launch.py
+        # doesn't currently forward a 'world' launch arg through to Gazebo,
+        # so keep these in sync by hand if that ever changes.
+        DeclareLaunchArgument(
+            'course',
+            default_value='speed_course_cfr',
+            description=(
+                "Which course's checkpoints to race (see "
+                'bot_navigation/lap_navigator_node.py): speed_course_cfr or '
+                'obstacle_course_cfr.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'num_laps',
+            default_value='0',
+            description="Laps to run; 0 uses the course's own default (3 for speed, 2 for obstacle).",
+        ),
+
         # Set use_sim_time parameter when using simulation
         SetEnvironmentVariable(
             name='ROS_DOMAIN_ID',
@@ -131,16 +152,57 @@ def generate_launch_description():
         # ),
         # Node(
         #     package="bot_perception",
-        #     executable="start_trigger_node",
-        #     name="start_trigger_node",
-        #     output="screen",
-        # ),
-        # Node(
-        #     package="bot_perception",
         #     executable="sensor_fusion_node",
         #     name="sensor_fusion_node",
         #     output="screen",
         # ),
+
+        # Vision-based autonomous start trigger (bot_perception) -- runs in
+        # both sim and on real hardware, unlike the Pi-only nodes above.
+        # Two variants because the image topic differs: sim's generic
+        # camera sensor bridges to /camera/image_raw (bot.urdf.xacro's
+        # camera_sensor, see gazebo_sim.launch.py's bridge list), while
+        # real hardware's depthai_ros_driver publishes on /oak/rgb/image_raw
+        # (start_trigger_node's own default, left unset here). It only
+        # detects the signal and publishes start_signal -- lap_navigator_node
+        # below is what actually sends Nav2 the route.
+        Node(
+            package='bot_perception',
+            executable='start_trigger_node',
+            name='start_trigger_node',
+            output='screen',
+            condition=IfCondition(LaunchConfiguration('use_sim')),
+            parameters=[{
+                'image_topic': '/camera/image_raw',
+                'use_sim_time': True,
+            }],
+        ),
+        Node(
+            package='bot_perception',
+            executable='start_trigger_node',
+            name='start_trigger_node',
+            output='screen',
+            condition=IfCondition(NotEqualsSubstitution(LaunchConfiguration('use_sim'), 'true')),
+            parameters=[{
+                'use_sim_time': False,
+            }],
+        ),
+
+        # Multi-lap course navigator (bot_navigation) -- subscribes to
+        # start_trigger_node's start_signal and sends Nav2 the checkpoint
+        # route for 'course' once it fires. Runs in both sim and on real
+        # hardware; no image-topic split needed since it only talks to Nav2.
+        Node(
+            package='bot_navigation',
+            executable='lap_navigator_node',
+            name='lap_navigator_node',
+            output='screen',
+            parameters=[{
+                'course': LaunchConfiguration('course'),
+                'num_laps': LaunchConfiguration('num_laps'),
+                'use_sim_time': LaunchConfiguration('use_sim'),
+            }],
+        ),
     ]
 
     # RPLidar driver - only if package is installed and not in sim mode

@@ -5,6 +5,12 @@
   <xacro:property name="base_length" value="0.45"/>  <!-- 17.7 inches -->
   <xacro:property name="base_width" value="0.27"/>   <!-- 10.6inches -->
   <xacro:property name="base_height" value="0.176"/>  <!-- chassis height -->
+  <!-- Gap between the ground and the underside of the chassis. Without it
+       the chassis box was modelled spanning z=0..base_height, i.e. sitting
+       flat on the floor rather than riding on the wheels. That is wrong on
+       its own terms, though it was not what blocked turning: see the wheel
+       friction block below for that. -->
+  <xacro:property name="ground_clearance" value="0.06"/>
   <xacro:property name="wheel_radius" value="0.12"/>  <!-- wheel radius -->
   <xacro:property name="wheel_width" value="0.06"/>  <!-- wheel width -->
   <xacro:property name="wheelbase" value="0.33"/>    <!-- distance between wheels -->
@@ -20,7 +26,7 @@
       <inertia ixx="0.3" ixy="0" ixz="0" iyy="0.5" iyz="0" izz="0.3"/>
     </inertial>
     <visual>
-      <origin xyz="0 0 ${base_height/2}" rpy="0 0 0"/>
+      <origin xyz="0 0 ${ground_clearance + base_height/2}" rpy="0 0 0"/>
       <geometry>
         <box size="${base_length} ${base_width} ${base_height}"/>
       </geometry>
@@ -29,7 +35,7 @@
       </material>
     </visual>
     <collision name="base_collision">
-      <origin xyz="0 0 ${base_height/2}" rpy="0 0 0"/>
+      <origin xyz="0 0 ${ground_clearance + base_height/2}" rpy="0 0 0"/>
       <geometry>
         <box size="${base_length} ${base_width} ${base_height}"/>
       </geometry>
@@ -80,8 +86,37 @@
 
     <gazebo reference="${prefix}_wheel">
       <material>Gazebo/Black</material>
-      <mu1>0.8</mu1>
-      <mu2>0.8</mu2>
+      <!-- Anisotropic tyre friction. This is what makes skid-steer
+           pivoting possible at all: a 4-wheel skid-steer can only rotate
+           by scrubbing all four tyres sideways, so lateral friction (mu1,
+           along fdir1) is low while rolling traction (mu2) stays high.
+
+           fdir1 is the WHEEL AXLE direction, but written as "0 0 1"
+           because fdir1 is expressed in the COLLISION frame and the
+           collision above is rotated rpy="pi/2 0 0", which maps the link's
+           Y axis onto the collision's Z. Getting this wrong is not a
+           subtle inaccuracy, it silently disables the whole friction
+           split: "0 1 0" here points along the contact normal, which is
+           degenerate, so the engine discards it and picks an arbitrary
+           direction. With that (and with the earlier isotropic 0.8/0.8)
+           the robot could not rotate AT ALL: a commanded 1.0 rad/s gave
+           exactly 0 deg of yaw while the wheels counter-rotated correctly,
+           so wheel odometry integrated turns that never happened and
+           heading was lost at every turn. With fdir1 correct, a 10s pivot
+           at 1.0 rad/s yields ~443 deg of real rotation.
+
+           The axle is also the only spin-invariant axis to aim fdir1
+           along: the wheel link rotates about it, so the friction split
+           stays put instead of tumbling with the wheel.
+
+           No <slip1>/<slip2> are set. They are not needed here: the
+           anisotropy alone reproduces realistic scrub (wheel odometry
+           over-reports a pivot by ~28%, which is why ekf_params.yaml gives
+           yaw to the IMU rather than the wheels). Add slip compliance only
+           if tyre modelling needs to get finer. -->
+      <mu1>0.05</mu1>
+      <mu2>1.0</mu2>
+      <fdir1>0 0 1</fdir1>
     </gazebo>
   </xacro:macro>
 
@@ -232,6 +267,15 @@
        orientation_covariance will read back all-zero regardless. -->
   <gazebo reference="imu_link">
     <sensor name="imu_sensor" type="imu">
+      <!-- Same reason as the lidar/camera sensors: without this the
+           bridged message carries gz's scoped sensor name
+           ("bot/base_link/imu_sensor") as its frame_id. That frame is not
+           in the TF tree, so robot_localization cannot transform the IMU
+           into base_link and silently DROPS every sample: the EKF's yaw
+           then sat at 0 while the IMU itself was correctly reporting the
+           turn, which is the whole reason imu0 exists in
+           ekf_params.yaml. -->
+      <gz_frame_id>imu_link</gz_frame_id>
       <always_on>true</always_on>
       <update_rate>100</update_rate>
       <topic>/imu</topic>

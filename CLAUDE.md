@@ -159,12 +159,15 @@ Two independent layers:
    isolated from the Pi/ROS 2 stack, driving a relay that breaks the motor
    driver's power supply directly (not a logic-level enable/disable line).
    This is the actual <1s guarantee — Linux/ROS 2 cannot provide it. The
-   Nano's serial RX is fed by a wireless receiver module (not the Pi); it
-   treats a heartbeat message from that module as the deadman signal —
+   Nano's serial RX is fed by a UART LoRa transceiver module (not the Pi);
+   it treats a heartbeat message from that module as the deadman signal —
    an explicit e-stop message or the heartbeat simply stopping (wireless
    signal loss) both de-energize the relay and cut power, and it stays cut
-   until a clean heartbeat resumes. See `arduino_ws/src/main.cpp` for the
-   serial protocol and relay logic. (Notes: an earlier version of this doc
+   until a clean heartbeat resumes. The transmitting end is `feather_ws` —
+   a Feather board reading a physical kill-switch input pin and reporting
+   status continuously over its own paired LoRa module. See
+   `arduino_ws/src/main.cpp` and `feather_ws/src/main.cpp` for the shared
+   serial protocol and each side's logic. (Notes: an earlier version of this doc
    assumed this role would be a Teensy — corrected 2026-09-20. The Teensy
    is now dedicated to wheel encoder reporting instead, see Hardware above
    and `bot_odometry`. An earlier version of this doc and of
@@ -206,6 +209,7 @@ Laptop-first, Pi 5 for final integration:
 - Perception sensor spec confirmation (camera-only CV vs added depth/LiDAR
   for obstacle detection) — pending official course documentation
 - E-stop Arduino Nano firmware (`arduino_ws`) is written (fail-safe deadman
+<<<<<<< Updated upstream
   logic against a wireless receiver module's heartbeat) but untested on
   real hardware; `RELAY_PIN`, relay active-high/low polarity, and the
   receiver module's actual serial framing/baud are still placeholders
@@ -215,6 +219,23 @@ Laptop-first, Pi 5 for final integration:
   2026-09-24 as Pololu #4843 (979.62 CPR at the gearbox output shaft);
   `bot_odometry`'s wheel_odom_node's `ticks_per_rev` default is updated to
   match (was a 1200 placeholder).
+=======
+  logic against a heartbeat received over a UART LoRa module) but untested
+  on real hardware; `RELAY_PIN`, relay active-high/low polarity, and the
+  LoRa module's actual baud rate are still placeholders
+- Remote kill-switch transmitter firmware (`feather_ws`) is written
+  (asymmetric-debounce switch read + continuous H/X status reporting over
+  its own paired LoRa module) but untested on real hardware; exact Feather
+  board variant, kill-switch pin, and LoRa module baud are still
+  placeholders. Assumes a transparent-serial LoRa module needing no
+  AT-command setup (e.g. Ebyte E32 in Normal mode) — if the actual module
+  is command-based (e.g. REYAX RYLR) instead, both this firmware and the
+  Nano's need an AT-command init sequence added
+- Wheel encoder part number/CPR and Teensy pin assignment TBD — real
+  hardware not yet in hand; `bot_odometry`'s wheel_odom_node and the Teensy
+  firmware in `teensy_ws` are written against placeholder values
+  (ticks_per_rev=1200) that need updating once encoders are chosen
+>>>>>>> Stashed changes
 - Nav2 params: `robot_radius` now matches `bot.urdf.xacro`'s real footprint
   and the map-then-race launch wiring (mapping.launch.py / bringup.launch.py)
   is in place; costmap inflation and controller gains are being addressed
@@ -385,23 +406,35 @@ course — a real fix there (Keepout Filter with a mask over the known
 official ramp geometry, or another slope-aware approach) is still needed
 before race day.
 
-## E-stop Nano firmware, BNO055 driver, and ultrasonic-on-Teensy (2026-09-20)
+## E-stop Nano firmware, remote kill-switch, BNO055 driver, and ultrasonic-on-Teensy (2026-09-20)
 
-Three related hardware-integration pieces landed together:
+Four related hardware-integration pieces landed together:
 
 - **`arduino_ws`** (previously empty): the primary e-stop Nano's firmware
   is now written — a fail-safe deadman implementation, not a simple
-  on/off relay. Its serial RX is fed by a wireless receiver module (not
-  the Pi, preserving electrical isolation from the Pi/ROS 2 stack per the
-  Safety architecture above). The relay is de-energized (motors cut) by
-  default at power-on, on an explicit `X` e-stop message, or if no `H`
+  on/off relay. Its serial RX is fed by a UART LoRa transceiver module
+  (not the Pi, preserving electrical isolation from the Pi/ROS 2 stack per
+  the Safety architecture above). The relay is de-energized (motors cut)
+  by default at power-on, on an explicit `X` e-stop message, or if no `H`
   heartbeat arrives within 200ms (covers wireless signal loss), and only
   re-energizes on a clean heartbeat. The relay breaks the motor driver's
   power supply directly, not a logic-level enable/disable line (corrected
   above in Safety architecture — an earlier version of this doc and of
   the firmware's own comments assumed the latter). Untested on real
-  hardware; `RELAY_PIN`, relay polarity, and the receiver module's serial
-  framing/baud are still placeholders (see Open items).
+  hardware; `RELAY_PIN`, relay polarity, and the LoRa module's UART baud
+  are still placeholders (see Open items).
+- **`feather_ws`** (new, previously empty): the remote kill-switch
+  transmitter on the other end of that LoRa link. A Feather reads a
+  physical kill-switch input pin (normally-closed to ground,
+  `INPUT_PULLUP`, so idle reads LOW and a press/cut wire/dead switch all
+  read HIGH — wiring faults fail toward e-stop) and reports status
+  continuously over its own paired LoRa module using the same `H`/`X`
+  protocol the Nano expects, every 100ms (well inside the Nano's 200ms
+  timeout). Debounce is asymmetric on purpose: any single HIGH reading
+  trips e-stop immediately, but clearing back to OK requires 50ms of
+  continuous LOW first — standard safety-relay practice (instant trip,
+  debounced release). Assumes a transparent-serial LoRa module needing no
+  AT-command setup; untested on real hardware (see Open items).
 - **`bot_imu`** (new package): bno055_node reads the BNO055 over I2C
   (Pi 5's hardware I2C1 bus, GPIO2/GPIO3) in NDOF fusion mode, publishing
   `sensor_msgs/Imu` on `imu` for `robot_localization`'s EKF — resolving
