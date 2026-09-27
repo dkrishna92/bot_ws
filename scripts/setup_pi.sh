@@ -61,6 +61,17 @@ SUBSYSTEM=="usb", ATTRS{idVendor}=="03e7", MODE="0666"
 SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="rplidar", MODE="0666"
 SUBSYSTEM=="tty", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="0483", SYMLINK+="teensy", MODE="0666"
 EOF
+
+# PJRC's Teensy rules (https://www.pjrc.com/teensy/00-teensy.rules): lets a
+# normal user flash the Teensy (teensy_loader_cli talks to the bootloader
+# and the running sketch over raw USB/hidraw, root-only by default), and
+# keeps ModemManager from probing the Teensy's /dev/ttyACM port.
+cat > /etc/udev/rules.d/00-teensy.rules <<'EOF'
+ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="04[789B]?", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_MM_PORT_IGNORE}="1"
+ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="04[789A]?", ENV{MTP_NO_PROBE}="1"
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="04[789ABCD]?", MODE:="0666"
+KERNEL=="hidraw*", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="04[789B]?", MODE:="0666"
+EOF
 udevadm control --reload-rules
 udevadm trigger
 

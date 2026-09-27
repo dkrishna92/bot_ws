@@ -248,12 +248,26 @@ Laptop-first, Pi 5 for final integration:
   reliable: occasional dropped heartbeats point to a still-marginal
   physical connection on the feather's module that needs re-seating or
   soldering before this is race-ready.
-- Wheel encoder Teensy pin assignment confirmed 2026-09-27 (see Hardware
-  above) — was TBD. Part number/CPR confirmed 2026-09-24 as Pololu #4843
-  (979.62 CPR at the gearbox output shaft); `bot_odometry`'s
-  wheel_odom_node's `ticks_per_rev` default is updated to match (was a
-  1200 placeholder). Board model (`teensy40` in `teensy_ws/platformio.ini`)
-  is still a working assumption, not yet confirmed against real hardware.
+- Wheel encoder Teensy pin assignment confirmed 2026-09-27 against the
+  actual wiring with a meter: **left A/B = pins 20/21, right A/B = 22/23**
+  (an earlier assignment had the sides reversed). Part number/CPR
+  confirmed 2026-09-24 as Pololu #4843 (979.62 CPR at the gearbox output
+  shaft); `bot_odometry`'s wheel_odom_node's `ticks_per_rev` matches. The
+  `teensy41` build in `teensy_ws/platformio.ini` flashes and runs on the
+  robot's Teensy (flashed from the Pi with PlatformIO in `~/.platformio`;
+  needs PJRC's udev rule, which `setup_pi.sh` installs).
+- **Encoder divider workaround (2026-09-27, temporary):** the A/B voltage
+  dividers deliver only ~1.2 V (left) / ~1.37 V (right) at the Teensy
+  pins, below the Teensy 4.1's ~2.3 V digital-high threshold, so no
+  digital edge ever registers. `teensy_ws/src/main.cpp` sets
+  `ENCODER_ANALOG_WORKAROUND 1`: a 40 kHz IntervalTimer reads the pins with
+  the ADC (8-bit, 0.4/0.8 V hysteresis) and decodes quadrature in software
+  (ISR ~13 us of each 25 us; `S,<isr_us>,<left_invalid>,<right_invalid>`
+  status line once a second, ignored by wheel_odom_node). Verified by hand:
+  each side counts positive going forward, zero invalid transitions, and
+  `/odom` publishes. Only checked at hand speed; watch the invalid counts at
+  full motor speed. Once the dividers are re-sized for ~3.0–3.3 V at the
+  pin, set it back to 0 (Encoder library).
 - Nav2 params: `robot_radius` now matches `bot.urdf.xacro`'s real footprint
   and the map-then-race launch wiring (mapping.launch.py / bringup.launch.py)
   is in place; costmap inflation and controller gains are being addressed
