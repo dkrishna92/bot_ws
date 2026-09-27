@@ -190,13 +190,13 @@ Two independent layers:
    a Feather board reading a physical kill-switch input pin and reporting
    status continuously over its own paired LoRa module. See
    `arduino_ws/src/main.cpp` and `feather_ws/src/main.cpp` for the shared
-   serial protocol and each side's logic. (Correction 2026-09-25: the
-   e-stop MCU is actually an ESP32 module, not an Arduino Nano -- "Nano"
-   elsewhere in this doc means this board. The ESP32 has onboard
-   Bluetooth/WiFi; any radio link to the Pi must stay status-only and
-   never able to command the relay, or it breaks the isolation above.
-   `arduino_ws` isn't on the racebot Pi, so which PlatformIO board target
-   the firmware builds for is unverified.) (Notes: an earlier version of this doc
+   serial protocol and each side's logic. (Clarified 2026-09-27: the
+   e-stop MCU is an Arduino Nano ESP32 -- "Nano" elsewhere in this doc
+   means this board. The ESP32 has onboard Bluetooth/WiFi; any radio link
+   to the Pi must stay status-only and never able to command the relay, or
+   it breaks the isolation above. BLE was removed from `arduino_ws`
+   entirely during bring-up -- see "E-stop wireless link: real-hardware
+   bring-up and sequencing" below.) (Notes: an earlier version of this doc
    assumed this role would be a Teensy — corrected 2026-09-20. The Teensy
    is now dedicated to wheel encoder reporting instead, see Hardware above
    and `bot_odometry`. An earlier version of this doc and of
@@ -236,18 +236,13 @@ Laptop-first, Pi 5 for final integration:
   CAD, close enough to drive Nav2 tuning in sim in the meantime
 - Perception sensor spec confirmation (camera-only CV vs added depth/LiDAR
   for obstacle detection) — pending official course documentation
-- E-stop Arduino Nano firmware (`arduino_ws`) is written (fail-safe deadman
-  logic against a heartbeat received over a UART LoRa module) but untested
-  on real hardware; `RELAY_PIN`, relay active-high/low polarity, and the
-  LoRa module's actual baud rate are still placeholders
-- Remote kill-switch transmitter firmware (`feather_ws`) is written
-  (asymmetric-debounce switch read + continuous H/X status reporting over
-  its own paired LoRa module) but untested on real hardware; exact Feather
-  board variant, kill-switch pin, and LoRa module baud are still
-  placeholders. Assumes a transparent-serial LoRa module needing no
-  AT-command setup (e.g. Ebyte E32 in Normal mode) — if the actual module
-  is command-based (e.g. REYAX RYLR) instead, both this firmware and the
-  Nano's need an AT-command init sequence added
+- E-stop wireless link (`arduino_ws` + `feather_ws`) is now tested and
+  confirmed working on real hardware, 2026-09-26 — see "E-stop wireless
+  link: real-hardware bring-up and sequencing" below for the full pin
+  assignments, protocol sequencing, and bring-up findings. Not yet fully
+  reliable: occasional dropped heartbeats point to a still-marginal
+  physical connection on the feather's module that needs re-seating or
+  soldering before this is race-ready.
 - Wheel encoder Teensy pin assignment TBD — real hardware not yet in hand;
   the Teensy firmware in `teensy_ws` is written against a placeholder pin
   assignment. Part number/CPR is no longer a placeholder — confirmed
@@ -273,6 +268,96 @@ Laptop-first, Pi 5 for final integration:
   goal-placement bug below was fixed — see "Frontier exploration
   reliability investigation" below; current lead suspect is dev-machine
   compute contention, not a further code bug, but that isn't confirmed yet
+
+## E-stop wireless link: real-hardware bring-up and sequencing (2026-09-26)
+
+Both `arduino_ws` and `feather_ws` are now tested and confirmed working on
+real hardware — the 2026-09-20 entry below covers when they were first
+written, but that was compiled-only, never wired up. Real hardware
+surfaced several placeholder-vs-actual-pin mismatches, all now corrected:
+
+- **Board identification:** the kill-switch transmitter is a "YD-RP2040"
+  Feather-form-factor clone board — it identifies over USB with Adafruit's
+  own Feather RP2040 vendor/product ID (239A:80F1/80F2), a common clone
+  pattern (reusing the factory bootloader identity rather than registering
+  a new one). `feather_ws/platformio.ini` targets PlatformIO's
+  `adafruit_feather` board definition (earlephilhower RP2040 core, via
+  maxgerhardt's community platform fork, since the official PlatformIO
+  `raspberrypi` platform has no Feather RP2040 board at all).
+- **feather_ws confirmed pins:** kill switch on GPIO20; the Ebyte E32
+  module's M0/M1 mode-select on GPIO10/GPIO11 (driven LOW/LOW for Normal
+  transparent mode); module UART on `Serial2` (RP2040 UART1), GP8 TX /
+  GP9 RX, crossed to the module's RXD/TXD. This board variant's own
+  `pins_arduino.h` defines `Serial2`'s pins as the dummy value 31 ("not
+  pinned out"), unlike the generic "pico" board where Serial2 defaults to
+  GP8/GP9 automatically — an explicit `setTX(8)/setRX(9)` remap in
+  `setup()` before `.begin()` is required, and was the actual root cause
+  of an extended period where the module never responded to anything,
+  even once the wiring itself was corrected.
+- **arduino_ws confirmed pins:** module UART RX/TX on the Nano ESP32's
+  "RX0"/"TX1" silkscreen pins, `D0`/`D1` in the board variant's own macros
+  (GPIO44/GPIO43) — an earlier placeholder had guessed raw GPIO4/GPIO5, a
+  real mismatch. M0/M1 on `D3`/`D4`. Relay on `D5` (GPIO8) — an earlier
+  raw-number placeholder (`7`) had actually resolved to `D4`'s GPIO (7), a
+  different physical pin than the confirmed D5 wiring. All of these now
+  use the board variant's own symbolic `Dx` macros rather than raw GPIO
+  numbers, specifically to avoid this class of mismatch recurring.
+- **BLE removed from arduino_ws:** it was only ever used for debug/
+  identification (finding the board over a Bluetooth scan), never part of
+  the e-stop signal path, and was the prime suspect for an intermittent
+  boot hang observed during bring-up (board would enumerate under its ROM
+  USB-Serial-JTAG fallback identity with a completely silent `Serial`,
+  recoverable only by a manual double-reset of the physical button).
+  Removing it eliminated the hang.
+- **LoRa UART baud standardized:** both sides' MCU-to-module UART baud is
+  9600 (Ebyte E32's factory default) — `arduino_ws` had been left at an
+  earlier placeholder of 115200, a mismatch that would have silently
+  broken the link (garbled bytes, permanent fail-safe cutoff) had it gone
+  untested.
+- **Confirmed working over real RF, not just bench loopback:** with the
+  above fixes, the Nano reliably receives the feather's heartbeat over the
+  actual wireless link (verified via continuous `H` reception matching the
+  ~100ms transmit interval). The reverse direction (Nano→feather) was not
+  exercised the same way and is unconfirmed — not a concern for the safety
+  path itself, since only the feather→Nano direction carries the actual
+  kill-switch signal.
+- **Link is not yet rock-solid:** occasional dropped heartbeats still
+  occur (visible as the Nano's status LED briefly blinking even under
+  normal operation) — likely a still-marginal physical connection
+  (breadboard jumpers) to the feather's module specifically, not a
+  protocol or pin-configuration problem (both are independently confirmed
+  correct via a UART loopback test and the module's own real
+  command-response during bring-up). Re-seating or soldering that
+  module's connections is the next step toward full reliability;
+  `HEARTBEAT_TIMEOUT_MS` was raised from 200ms to 400ms to tolerate more
+  of this while the wiring is finalized, still comfortably under the
+  rules' 1s cutoff.
+
+**Sequencing / protocol, for reference:**
+
+1. `feather_ws` reads the kill switch every loop iteration (asymmetric
+   debounce: instant trip, 50ms debounced release) and sends one line —
+   `H\n` (OK) or `X\n` (asserted) — over its LoRa module every
+   `REPORT_INTERVAL_MS` (100ms / 10Hz), regardless of whether the state
+   changed since the last report.
+2. `arduino_ws` reads whatever bytes have arrived from its own paired
+   module every loop iteration. The most recently parsed `H` or `X` sets
+   the relay state immediately.
+3. Independent of message content, if no valid `H`/`X` has arrived within
+   `HEARTBEAT_TIMEOUT_MS` (400ms) of the last one — or none has ever
+   arrived, e.g. right after power-on — the relay is forced de-energized
+   (fail-safe), overriding whatever the last received state was.
+4. The relay only re-energizes on a clean `H` received while not
+   link-lost. There is no separate "resume" message — the transmitter
+   simply goes back to sending `H` once the switch clears.
+5. Status LEDs (for diagnosis without a USB serial monitor): `feather_ws`'s
+   LED (GPIO25 — this clone's `LED_BUILTIN`/GPIO13 is unpopulated; it
+   separately has an unused NeoPixel) blinks while sending `H` and goes
+   solid while sending `X`. `arduino_ws`'s LED is off while healthy (last
+   message was `H`), solid while an `X` is asserted, and blinks
+   specifically when the link is lost/stale — so a fail-safe triggered by
+   a timeout is visually distinguishable from a deliberate kill-switch
+   press.
 
 ## Frontier exploration reliability investigation (2026-09-20, in progress)
 
