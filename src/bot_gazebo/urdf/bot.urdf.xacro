@@ -17,6 +17,30 @@
   <xacro:property name="track_width" value="0.32"/>  <!-- left-to-right wheel-centre spacing, 0.32 m = 12.6 in -->
   <xacro:property name="mass_base" value="3.2"/>    <!-- 3.2 kg = 7.0 lb -->
   <xacro:property name="mass_wheel" value="0.2"/>   <!-- 0.2 kg = 0.44 lb each -->
+  <!-- OAK-D S2 housing (~91 x 28 x 17.5 mm) and its measured mount height:
+       bottom of the housing 9 cm above the ground (measured 2026-09-25).
+       camera_link is the housing centre, which is also where
+       depthai_ros_driver hangs its oak-* optical frames (parent_frame). -->
+  <xacro:property name="oak_width" value="0.091"/>
+  <xacro:property name="oak_height" value="0.028"/>
+  <xacro:property name="oak_depth" value="0.0175"/>
+  <xacro:property name="oak_bottom_height" value="0.09"/>
+  <!-- Sensor placement, measured on the robot 2026-09-25 (relative to the
+       OAK housing, which is easy to measure against):
+       - OAK front panel is the robot's front edge (its 3 cm stand-off from
+         the chassis is already inside base_length), on the centreline
+         (lateral position assumed, not measured).
+       - Lidar centre is 3.5 cm behind the OAK front panel, 5.5 cm from the
+         OAK's left edge (i.e. 0.95 cm right of the OAK centre), and the
+         lidar top is 5 cm above the OAK top.
+       RPLIDAR S2 body is 77 mm dia x 38.85 mm tall (datasheet). lidar_link
+       sits on the scan plane, estimated 13 mm below the top of the head
+       (not measured; check against the window slit on the rotating head). -->
+  <xacro:property name="oak_front_x" value="${base_length/2}"/>
+  <xacro:property name="lidar_radius" value="0.0385"/>
+  <xacro:property name="lidar_body_height" value="0.03885"/>
+  <xacro:property name="lidar_top_height" value="${oak_bottom_height + oak_height + 0.05}"/>
+  <xacro:property name="lidar_plane_below_top" value="0.013"/>
 
   <!-- Base Link (Chassis) -->
   <link name="base_link">
@@ -133,18 +157,18 @@
       <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.001"/>
     </inertial>
     <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <origin xyz="0 0 ${lidar_plane_below_top - lidar_body_height/2}" rpy="0 0 0"/>
       <geometry>
-        <cylinder radius="0.04" length="0.08"/>
+        <cylinder radius="${lidar_radius}" length="${lidar_body_height}"/>
       </geometry>
       <material name="lidar_color">
         <color rgba="0.3 0.3 0.3 1.0"/>  <!-- Gray -->
       </material>
     </visual>
     <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <origin xyz="0 0 ${lidar_plane_below_top - lidar_body_height/2}" rpy="0 0 0"/>
       <geometry>
-        <cylinder radius="0.04" length="0.08"/>
+        <cylinder radius="${lidar_radius}" length="${lidar_body_height}"/>
       </geometry>
     </collision>
   </link>
@@ -159,7 +183,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <box size="0.08 0.12 0.06"/>
+        <box size="${oak_depth} ${oak_width} ${oak_height}"/>
       </geometry>
       <material name="camera_color">
         <color rgba="0.4 0.4 0.4 1.0"/>  <!-- Dark gray -->
@@ -168,7 +192,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <box size="0.08 0.12 0.06"/>
+        <box size="${oak_depth} ${oak_width} ${oak_height}"/>
       </geometry>
     </collision>
   </link>
@@ -197,23 +221,24 @@
     </collision>
   </link>
 
-  <!-- Lidar Joint -->
+  <!-- Lidar Joint. base_link's origin is at ground level (wheels are
+       centred at z=wheel_radius, so they touch the floor), so z IS the scan
+       plane's height above ground: ~0.155 m, above the OAK's top (0.118 m)
+       so the beam clears the camera. Measured position: see the sensor
+       placement properties at the top of this file. The live scan confirms
+       no self-returns (nothing closer than 0.32 m, 2026-09-25). -->
   <joint name="lidar_joint" type="fixed">
-    <!-- 0.1143m = 4.5in above the ground, matching the RPLIDAR's planned
-         mount height on the real robot. base_link's origin is at ground
-         level (wheels are radius 0.12 centred at z=0.12, so they touch the
-         floor), so this z IS the height above ground directly. Mounting
-         this low is safe despite the 360-degree scan: the wheels (~0.11m
-         out) and chassis body are both inside the sensor's 0.3m
-         <range><min> dead zone, so they never produce self-returns. -->
-    <origin xyz="0 0 0.1143" rpy="0 0 0"/>
+    <origin xyz="${oak_front_x - 0.035} ${oak_width/2 - 0.055} ${lidar_top_height - lidar_plane_below_top}" rpy="0 0 0"/>
     <parent link="base_link"/>
     <child link="lidar_link"/>
   </joint>
 
-  <!-- Camera Joint -->
+  <!-- Camera Joint. z is measured (base_link's origin is at ground level,
+       see lidar_joint): housing bottom at oak_bottom_height, so its centre
+       is half a housing-height above that (~0.104 m), below the lidar's
+       scan plane. x puts the front panel at the robot's front edge. -->
   <joint name="camera_joint" type="fixed">
-    <origin xyz="${base_length/2 - 0.05} 0 ${base_height/2 + 0.05}" rpy="0 0 0"/>
+    <origin xyz="${oak_front_x - oak_depth/2} 0 ${oak_bottom_height + oak_height/2}" rpy="0 0 0"/>
     <parent link="base_link"/>
     <child link="camera_link"/>
   </joint>

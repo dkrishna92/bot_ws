@@ -51,13 +51,24 @@ Usage:
     # bringup.launch.py can localize against it on race day:
     colcon build --packages-select bot_bringup
 """
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, NotEqualsSubstitution
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch_ros.actions import Node, LifecycleNode
+
+
+def _rviz_available():
+    # Launching a Node whose package isn't installed crashes the whole launch
+    # *after* earlier nodes have started, orphaning them (still holding the
+    # lidar port and motor GPIO). The Pi doesn't ship RViz, so check up front.
+    try:
+        get_package_share_directory('rviz2')
+        return True
+    except PackageNotFoundError:
+        return False
 
 
 def generate_launch_description():
@@ -194,6 +205,15 @@ def generate_launch_description():
         # in _gazebo_include above (matches resume_pose when resume_map is set).
         OpaqueFunction(function=_gazebo_include),
 
+        # Real-hardware layer (URDF TF, lidar/OAK-D drivers, motor/watchdog/
+        # odometry/IMU nodes) -- Gazebo provides all of this in sim.
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                PathJoinSubstitution([pkg_bringup, 'launch', 'hardware.launch.py'])
+            ),
+            condition=UnlessCondition(LaunchConfiguration('use_sim')),
+        ),
+
         # Odometry fusion -- slam_toolbox's scan matching is more accurate
         # with a fused odom input than raw wheel/ackermann odometry alone.
         # robot_localization's own ekf.launch.py ignores 'namespace'/
@@ -293,5 +313,5 @@ def generate_launch_description():
             parameters=[{'use_sim_time': LaunchConfiguration('use_sim')}],
             condition=IfCondition(LaunchConfiguration('rviz')),
             output='screen',
-        ),
+        ) if _rviz_available() else LogInfo(msg='rviz2 not installed -- skipping RViz'),
     ])

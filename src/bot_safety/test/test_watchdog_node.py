@@ -1,6 +1,6 @@
 """Behavior tests for watchdog_node's fault-computation logic.
 
-Runs in dry-run mode (RPi.GPIO / pyserial absent or port unavailable) --
+Runs in dry-run mode (dry_run param; MCU serial mirror is disabled) --
 _tick's fault decision is exercised directly rather than through real GPIO
 or MCU serial I/O.
 """
@@ -8,6 +8,7 @@ import time
 
 import pytest
 import rclpy
+from rclpy.parameter import Parameter
 from sensor_msgs.msg import LaserScan
 
 from bot_safety.watchdog_node import WatchdogNode
@@ -16,7 +17,7 @@ from bot_safety.watchdog_node import WatchdogNode
 @pytest.fixture
 def node():
     rclpy.init()
-    n = WatchdogNode()
+    n = WatchdogNode(parameter_overrides=[Parameter("dry_run", value=True)])
     yield n
     n.destroy_node()
     rclpy.shutdown()
