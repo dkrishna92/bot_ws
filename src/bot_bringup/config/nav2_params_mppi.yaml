@@ -35,10 +35,10 @@ amcl:
     # covers this pose (a map built for a different world/spawn won't).
     set_initial_pose: true
     initial_pose:
-      x: 19.0
-      y: 4.75
+      x: -0.7
+      y: 0.0
       z: 0.0
-      yaw: 3.14159265
+      yaw: 0.0
     lambda_short: 0.1
     laser_likelihood_max_dist: 2.0
     laser_max_range: 100.0

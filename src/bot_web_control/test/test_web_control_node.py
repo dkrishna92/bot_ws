@@ -38,6 +38,7 @@ def _make_node(linear_speed=0.3, angular_speed=1.0):
     node._use_sim = True
     node._world = "speed_course_cfr"
     node._checkpoint_path = "src/bot_bringup/config/maps/checkpoint"
+    node._map_save_path = "src/bot_bringup/config/maps/map"
     node._cmd_pub = _FakePublisher()
     return node
 
@@ -228,6 +229,7 @@ class _FakeFuture:
 
 
 class _FakeSaveMapClient:
+    """Fake for slam_toolbox's save_map service (std_msgs/String-wrapped name)."""
     def __init__(self, available=True):
         self._available = available
         self.last_request = None
@@ -240,33 +242,87 @@ class _FakeSaveMapClient:
         return _FakeFuture()
 
 
-def test_save_map_uses_checkpoint_path_by_default():
+class _FakeSerializeClient:
+    """Fake for slam_toolbox's serialize_map service (plain string filename)."""
+    def __init__(self, available=True):
+        self._available = available
+        self.last_request = None
+
+    def wait_for_service(self, timeout_sec=0.0):
+        return self._available
+
+    def call_async(self, request):
+        self.last_request = request
+        return _FakeFuture()
+
+
+# save_checkpoint must use serialize_map (not save_map) -- see this
+# module's own docstring's IMPORTANT note and web_control_node.py's: only
+# serialize_map's .posegraph/.data output is something slam_toolbox's
+# map_file_name startup parameter can actually resume from.
+
+def test_save_checkpoint_uses_checkpoint_path_by_default():
     node = _make_node()
     node._checkpoint_path = "src/bot_bringup/config/maps/checkpoint"
-    node._save_map_client = _FakeSaveMapClient()
+    node._serialize_client = _FakeSerializeClient()
 
-    ok, msg = node.save_map(None)
+    ok, msg = node.save_checkpoint(None)
 
     assert ok is True
-    assert node._save_map_client.last_request.name.data == "src/bot_bringup/config/maps/checkpoint"
+    assert node._serialize_client.last_request.filename == "src/bot_bringup/config/maps/checkpoint"
     assert "checkpoint" in msg
 
 
-def test_save_map_uses_explicit_name_when_given():
+def test_save_checkpoint_uses_explicit_name_when_given():
+    node = _make_node()
+    node._serialize_client = _FakeSerializeClient()
+
+    ok, _ = node.save_checkpoint("my_custom_checkpoint")
+
+    assert ok is True
+    assert node._serialize_client.last_request.filename == "my_custom_checkpoint"
+
+
+def test_save_checkpoint_reports_failure_when_service_unavailable():
+    node = _make_node()
+    node._serialize_client = _FakeSerializeClient(available=False)
+
+    ok, msg = node.save_checkpoint(None)
+
+    assert ok is False
+    assert "not available" in msg
+
+
+# save_final_map must use save_map (not serialize_map) -- its .pgm/.yaml
+# output is what bringup.launch.py's amcl/map_server actually load.
+
+def test_save_final_map_uses_map_save_path_by_default():
+    node = _make_node()
+    node._map_save_path = "src/bot_bringup/config/maps/map"
+    node._save_map_client = _FakeSaveMapClient()
+
+    ok, msg = node.save_final_map(None)
+
+    assert ok is True
+    assert node._save_map_client.last_request.name.data == "src/bot_bringup/config/maps/map"
+    assert "final map" in msg
+
+
+def test_save_final_map_uses_explicit_name_when_given():
     node = _make_node()
     node._save_map_client = _FakeSaveMapClient()
 
-    ok, _ = node.save_map("my_custom_map")
+    ok, _ = node.save_final_map("my_custom_map")
 
     assert ok is True
     assert node._save_map_client.last_request.name.data == "my_custom_map"
 
 
-def test_save_map_reports_failure_when_service_unavailable():
+def test_save_final_map_reports_failure_when_service_unavailable():
     node = _make_node()
     node._save_map_client = _FakeSaveMapClient(available=False)
 
-    ok, msg = node.save_map(None)
+    ok, msg = node.save_final_map(None)
 
     assert ok is False
     assert "not available" in msg

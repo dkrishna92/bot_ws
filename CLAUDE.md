@@ -268,6 +268,43 @@ Laptop-first, Pi 5 for final integration:
   goal-placement bug below was fixed — see "Frontier exploration
   reliability investigation" below; current lead suspect is dev-machine
   compute contention, not a further code bug, but that isn't confirmed yet
+- AMCL's initial pose is a hardcoded constant, real-hardware-ready only in
+  appearance (2026-09-27): `nav2_params.yaml`'s `set_initial_pose: true` /
+  `initial_pose: {x: 19.0, y: 4.75, yaw: pi}` exists because the
+  vision-only autonomous start means no human is ever present to publish
+  `/initialpose` — without a seed, AMCL never starts broadcasting `map`,
+  and everything downstream hangs waiting on that transform forever. In
+  sim this is exact, since `gazebo_sim.launch.py` deterministically spawns
+  the robot at that same coordinate. On real hardware it's unconditional
+  (not gated by `use_sim`/`use_sim_time`) — AMCL would seed at that exact
+  fixed point regardless of where the robot is actually placed, an
+  implicit and currently undocumented assumption that the robot will be
+  placed at a physical spot surveyed to match it precisely. Not yet
+  decided how to actually handle this for the real course: candidates are
+  (a) physically calibrate + document a marked start position against the
+  real map's origin — lowest effort, fragile on placement precision every
+  run; (b) switch AMCL to global localization mode, trading a slightly
+  slower first-scan convergence for removing the placement-precision
+  requirement entirely; (c) have `start_trigger_node` (already
+  vision-based) estimate and publish `/initialpose` itself from a known
+  visual marker, replacing the hardcoded seed — most robust, most work.
+- A restored/stale map can silently mismatch the hardcoded AMCL initial
+  pose above (found 2026-09-27): `config/maps/map.yaml`'s saved origin
+  varies noticeably between separate mapping runs against the same course
+  and spawn point (one run's map covered `x=19.0` comfortably, another's
+  fell 0.16m short of it) — consistent with the frontier exploration
+  reliability issues above producing incomplete coverage near the map's
+  edges, not a config drift. A map that's just barely too small places
+  AMCL's seeded pose outside the map entirely, surfacing as "robot out of
+  bounds" in Nav2/RViz despite Gazebo's ground-truth spawn being correct.
+  No automated check currently catches this before it's committed or
+  raced on — worth a validation step (confirm a freshly-saved map's
+  bounds actually contain `nav2_params.yaml`'s `initial_pose` with margin)
+  before trusting any given `map.yaml` for a race run. Temporary
+  workaround applied 2026-09-27: `initial_pose.x` nudged 19.0 → 18.5 to
+  fall back inside the current map's bounds, at the cost of a small known
+  inaccuracy versus the real spawn point. Revert to 19.0 once the map is
+  regenerated to actually cover it.
 
 ## E-stop wireless link: real-hardware bring-up and sequencing (2026-09-26)
 

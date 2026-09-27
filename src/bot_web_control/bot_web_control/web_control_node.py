@@ -7,18 +7,42 @@ alongside an rclpy node, serving a single-page dashboard with:
     tracked, then (if workspace_root is set) best-effort runs
     scripts/clean_sim.sh -- or scripts/clean_robot.sh when use_sim is false
     -- for a thorough sweep that catches strays a process-group kill misses.
-  - Mapping Run: launches mapping.launch.py with teleop:=true (this tool's
-    own teleop feature below is what you'd drive it with). Optionally
-    resumes from a previously-saved checkpoint map at a given initial pose
-    (see Save Map / Set Initial Pose below) instead of starting empty --
-    forwards straight through to mapping.launch.py's own resume_map/
-    resume_pose args (see that file's docstring for the full mechanism,
-    including why the initial pose also has to match wherever the sim
-    robot actually spawns).
-  - Save Map: calls slam_toolbox's /slam_toolbox/save_map service (same
-    service frontier_explore_node itself uses) to checkpoint the
-    in-progress map without ending the mapping run, so a later Mapping Run
-    can resume from it instead of re-driving the whole course again.
+  - Start New Mapping Run: launches mapping.launch.py with teleop:=true and
+    no resume args (this tool's own teleop feature below is what you'd
+    drive it with) -- starts from a blank map.
+  - Resume Mapping Run: same, but forwards resume_map/resume_pose to
+    mapping.launch.py so slam_toolbox continues from a previously-saved
+    checkpoint instead of starting empty (see that file's docstring for
+    the full mechanism, including why the initial pose also has to match
+    wherever the sim robot actually spawns).
+  - Save Checkpoint: calls slam_toolbox's /slam_toolbox/serialize_map
+    service (NOT save_map -- see the note below) to checkpoint the
+    in-progress map without ending the mapping run, so Resume Mapping Run
+    above can genuinely continue from it later.
+  - Save Final Map: calls slam_toolbox's /slam_toolbox/save_map service to
+    export the current map as the .pgm/.yaml pair bringup.launch.py's
+    amcl/map_server actually consumes for racing. Use this once mapping is
+    complete -- its output is a flattened occupancy-grid snapshot, not
+    something Resume Mapping Run can continue from (see the note below).
+  - IMPORTANT, found 2026-09-27: save_map and serialize_map are NOT
+    interchangeable, despite both being colloquially "saving the map".
+    save_map exports a flattened nav_msgs/OccupancyGrid image (.pgm/.yaml)
+    -- what map_server/amcl need, but slam_toolbox's own map_file_name
+    startup parameter (what Resume Mapping Run relies on, per
+    mapper_params_localization.yaml's stock example) expects a serialized
+    pose graph (.posegraph/.data) instead, which only serialize_map
+    produces. Checkpointing via save_map alone (an earlier version of
+    this tool, and of mapping.launch.py's own docstring, did exactly
+    this) makes Resume Mapping Run silently start a fresh, empty map
+    instead of actually continuing -- slam_toolbox never finds the
+    serialized files it's looking for at that path, so everything the
+    robot doesn't happen to re-scan during the resumed drive reverts to
+    unknown space. This surfaced as a real bug: a resumed run "fixed" an
+    AMCL out-of-bounds issue (the map's bounds did grow, since that part
+    only needed fresh scans near the edge) while silently breaking Nav2
+    planning elsewhere on the course (large unknown/phantom-obstacle
+    patches where the old, undiscarded-looking but actually-gone map data
+    used to be).
   - Set Initial Pose: x/y/yaw fields the dashboard sends as resume_pose --
     this must be the robot's actual pose within the checkpoint map when it
     was saved (e.g. from `ros2 run tf2_ros tf2_echo map base_link` at save
@@ -63,7 +87,7 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import OccupancyGrid
 from std_msgs.msg import String
-from slam_toolbox.srv import SaveMap
+from slam_toolbox.srv import SaveMap, SerializePoseGraph
 
 TELEOP_STALE_S = 0.5  # zero cmd_vel if the browser stops sending for this long
 SAVE_MAP_TIMEOUT_S = 10.0
@@ -108,8 +132,15 @@ class WebControlNode(Node):
         # safety net for orphaned processes.
         self.declare_parameter("workspace_root", "")
         # Path prefix (no extension), workspace-relative -- matches
-        # mapping.launch.py's own map_save_path/resume_map convention.
+        # mapping.launch.py's own resume_map convention. This is where
+        # Save Checkpoint writes and Resume Mapping Run reads from; it is
+        # NOT what bringup.launch.py races against (see map_save_path).
         self.declare_parameter("checkpoint_path", "src/bot_bringup/config/maps/checkpoint")
+        # Path prefix (no extension), workspace-relative -- matches
+        # mapping.launch.py's own map_save_path convention and what
+        # bringup.launch.py's amcl/map_server actually loads. Save Final
+        # Map writes here.
+        self.declare_parameter("map_save_path", "src/bot_bringup/config/maps/map")
 
         self._linear_speed = self.get_parameter("default_linear_speed").value
         self._angular_speed = self.get_parameter("default_angular_speed").value
@@ -117,6 +148,7 @@ class WebControlNode(Node):
         self._use_sim = self.get_parameter("use_sim").value
         self._workspace_root = self.get_parameter("workspace_root").value
         self._checkpoint_path = self.get_parameter("checkpoint_path").value
+        self._map_save_path = self.get_parameter("map_save_path").value
 
         self._lock = threading.Lock()
         self._latest_map: OccupancyGrid | None = None
@@ -127,6 +159,7 @@ class WebControlNode(Node):
 
         self._cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)
         self._save_map_client = self.create_client(SaveMap, "/slam_toolbox/save_map")
+        self._serialize_client = self.create_client(SerializePoseGraph, "/slam_toolbox/serialize_map")
         self.create_subscription(OccupancyGrid, "map", self._on_map, 1)
         self.create_timer(0.1, self._teleop_watchdog_tick)
 
@@ -187,9 +220,13 @@ class WebControlNode(Node):
                         resume_pose=body.get("pose"),
                     )
                     self._send_json({"ok": ok, "message": msg})
-                elif self.path == "/api/save_map":
+                elif self.path == "/api/save_checkpoint":
                     body = self._read_json()
-                    ok, msg = node.save_map(body.get("name"))
+                    ok, msg = node.save_checkpoint(body.get("name"))
+                    self._send_json({"ok": ok, "message": msg})
+                elif self.path == "/api/save_final_map":
+                    body = self._read_json()
+                    ok, msg = node.save_final_map(body.get("name"))
                     self._send_json({"ok": ok, "message": msg})
                 elif self.path == "/api/stop":
                     ok, msg = node.stop_launch()
@@ -281,18 +318,10 @@ class WebControlNode(Node):
             flipped[dst * w:(dst + 1) * w] = pixels[row * w:(row + 1) * w]
         return encode_grayscale_png(w, h, bytes(flipped))
 
-    def save_map(self, name: str | None):
-        """Checkpoint the in-progress map via slam_toolbox's own save_map
-        service (same one frontier_explore_node uses) -- does not stop
-        mapping, just serializes the current pose graph/map to disk so a
-        later Mapping Run can resume from it via start_launch(resume=True).
-        """
-        name = name or self._checkpoint_path
-        if not self._save_map_client.wait_for_service(timeout_sec=2.0):
-            return False, "slam_toolbox save_map service not available -- is a mapping run active?"
-        request = SaveMap.Request()
-        request.name = String(data=name)
-        future = self._save_map_client.call_async(request)
+    def _call_and_wait(self, client, request, service_label: str):
+        if not client.wait_for_service(timeout_sec=2.0):
+            return False, f"{service_label} service not available -- is a mapping run active?"
+        future = client.call_async(request)
         done = threading.Event()
         future.add_done_callback(lambda f: done.set())
         # The main executor thread (already spinning independently of this
@@ -301,8 +330,39 @@ class WebControlNode(Node):
         # rather than spinning ourselves (would risk the "executor already
         # spinning" collision this project hit before with frontier_explore_node).
         if not done.wait(timeout=SAVE_MAP_TIMEOUT_S):
-            return False, "save_map call timed out"
-        return True, f"saved map as '{name}'"
+            return False, f"{service_label} call timed out"
+        return True, None
+
+    def save_checkpoint(self, name: str | None):
+        """Checkpoint the in-progress map via slam_toolbox's serialize_map
+        service -- does not stop mapping. Unlike save_map (a flattened
+        occupancy-grid snapshot), this writes the actual pose graph
+        (.posegraph/.data), which is what slam_toolbox's map_file_name
+        startup parameter needs to genuinely continue from later (see this
+        file's module docstring's IMPORTANT note for why save_map alone
+        can't do this, found 2026-09-27).
+        """
+        name = name or self._checkpoint_path
+        request = SerializePoseGraph.Request()
+        request.filename = name
+        ok, err = self._call_and_wait(self._serialize_client, request, "slam_toolbox serialize_map")
+        if not ok:
+            return False, err
+        return True, f"saved checkpoint '{name}' (resumable via Resume Mapping Run)"
+
+    def save_final_map(self, name: str | None):
+        """Export the current map via slam_toolbox's save_map service --
+        the flattened .pgm/.yaml pair bringup.launch.py's amcl/map_server
+        actually load for racing. Not resumable by a later mapping run --
+        use save_checkpoint for that instead.
+        """
+        name = name or self._map_save_path
+        request = SaveMap.Request()
+        request.name = String(data=name)
+        ok, err = self._call_and_wait(self._save_map_client, request, "slam_toolbox save_map")
+        if not ok:
+            return False, err
+        return True, f"saved final map as '{name}' (ready for bringup.launch.py)"
 
     def start_launch(self, target: str, resume: bool = False, resume_pose: str | None = None):
         with self._lock:

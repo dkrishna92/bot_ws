@@ -30,16 +30,17 @@
   <div class="row">
     <div class="panel">
       <div><button id="btnStart">Start (bringup)</button></div>
-      <div><button id="btnMapping">Mapping Run (teleop)</button></div>
       <div><button id="btnStop" class="danger">Stop</button></div>
-      <div><button id="btnSaveMap">Save Map (checkpoint)</button></div>
-      <div style="margin-top:0.5rem;">
-        <label><input type="checkbox" id="resumeCheck"> Resume from checkpoint on next Mapping Run</label>
-      </div>
-      <div>Initial pose (must match the robot's actual pose in the checkpoint map -- see <code>tf2_echo map base_link</code>):</div>
+      <hr style="border-color:#444; width:100%;">
+      <div><button id="btnMappingNew">Start New Mapping Run</button></div>
+      <div><button id="btnMappingResume">Resume Mapping Run</button></div>
+      <div>Initial pose for Resume (must match the robot's actual pose in the checkpoint when it was saved -- see <code>tf2_echo map base_link</code>):</div>
       <label>x <input type="number" id="poseX" value="0.0" step="0.1" style="width:5rem;"></label>
       <label>y <input type="number" id="poseY" value="0.0" step="0.1" style="width:5rem;"></label>
       <label>yaw (rad) <input type="number" id="poseYaw" value="0.0" step="0.1" style="width:5rem;"></label>
+      <hr style="border-color:#444; width:100%;">
+      <div><button id="btnSaveCheckpoint">Save Checkpoint (to resume later)</button></div>
+      <div><button id="btnSaveFinalMap">Save Final Map (for racing)</button></div>
     </div>
 
     <div class="panel">
@@ -139,10 +140,11 @@ bindHoldButton('btnBack', 's');
 bindHoldButton('btnLeft', 'a');
 bindHoldButton('btnRight', 'd');
 
-// Start / Stop / Mapping Run / Save Map.
+// Start / Stop / Mapping Run (new or resume) / Save (checkpoint or final).
 document.getElementById('btnStart').addEventListener('click', () => fetch('/api/launch/bringup', { method: 'POST' }));
-document.getElementById('btnMapping').addEventListener('click', () => {
-  const resume = document.getElementById('resumeCheck').checked;
+document.getElementById('btnStop').addEventListener('click', () => fetch('/api/stop', { method: 'POST' }));
+
+function startMapping(resume) {
   const pose = [
     document.getElementById('poseX').value,
     document.getElementById('poseY').value,
@@ -153,13 +155,17 @@ document.getElementById('btnMapping').addEventListener('click', () => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ resume: resume, pose: pose })
   });
-});
-document.getElementById('btnStop').addEventListener('click', () => fetch('/api/stop', { method: 'POST' }));
-document.getElementById('btnSaveMap').addEventListener('click', () => {
-  fetch('/api/save_map', { method: 'POST' })
+}
+document.getElementById('btnMappingNew').addEventListener('click', () => startMapping(false));
+document.getElementById('btnMappingResume').addEventListener('click', () => startMapping(true));
+
+function saveTo(endpoint) {
+  fetch(endpoint, { method: 'POST' })
     .then(r => r.json())
     .then(s => alert(s.message));
-});
+}
+document.getElementById('btnSaveCheckpoint').addEventListener('click', () => saveTo('/api/save_checkpoint'));
+document.getElementById('btnSaveFinalMap').addEventListener('click', () => saveTo('/api/save_final_map'));
 
 // Status + speed defaults from the server, and periodic map refresh.
 let speedsInitialized = false;

@@ -32,9 +32,22 @@ Usage:
     # Resume mapping from a previously-saved (incomplete) map instead of an
     # empty one -- useful for iterating on a stall/bug that only shows up
     # partway through a run, without re-exploring/re-driving the whole
-    # course from scratch every time. Save a checkpoint mid-run with:
-    #   ros2 service call /slam_toolbox/save_map slam_toolbox/srv/SaveMap \
-    #       "{name: {data: 'src/bot_bringup/config/maps/checkpoint'}}"
+    # course from scratch every time. Save a checkpoint mid-run with
+    # serialize_map, NOT save_map (found 2026-09-27, was save_map here
+    # before): map_file_name below is a slam_toolbox startup parameter
+    # that loads a *serialized pose graph* (.posegraph/.data), the same
+    # format mapper_params_localization.yaml's own stock example expects
+    # -- save_map only ever exports a flattened occupancy-grid image
+    # (.pgm/.yaml, what bringup.launch.py's amcl/map_server load for
+    # racing), which map_file_name can't load at all. Checkpointing via
+    # save_map alone makes this resume silently start a fresh, empty map
+    # instead of continuing -- everything the robot doesn't happen to
+    # re-scan during the resumed drive reverts to unknown space, which can
+    # look like it "worked" (the map's bounds grow to cover new ground)
+    # while actually discarding previously-good map data elsewhere:
+    #   ros2 service call /slam_toolbox/serialize_map \
+    #       slam_toolbox/srv/SerializePoseGraph \
+    #       "{filename: 'src/bot_bringup/config/maps/checkpoint'}"
     # then resume from it (resume_pose is the robot's actual x,y,yaw in the
     # checkpoint map's frame when it was saved -- get this from `ros2 run
     # tf2_ros tf2_echo map base_link` at save time). In use_sim mode this
