@@ -50,8 +50,10 @@ Hard constraints from the rules doc:
   wheel encoders, reporting raw echo pulse widths over the same USB serial
   link as encoder ticks — see `bot_odometry`'s wheel_odom_node below,
   which now owns both. The old `bot_ultrasonic` package (Pi-side GPIO
-  node) is retired. Trigger/echo pin assignment on the Teensy is a
-  placeholder, same pending-spec status as the RPLIDAR model below.
+  node) is retired. **Design changed 2026-09-27: two sensors (left/right),
+  not three** — the earlier front-left/front-right/rear layout dropped the
+  rear sensor. Trigger/echo pins confirmed on the Teensy: left Trig=2/
+  Echo=3, right Trig=4/Echo=5 (`teensy_ws`'s `LEFT_TRIG_PIN`/etc).
 - Wheel encoders: quadrature, one per side (matches the DiffDrive plugin's
   left_joint/right_joint grouping in `bot_gazebo`), read by a Teensy via the
   `Encoder` library and reported to the Pi over USB serial as tick counts —
@@ -60,8 +62,11 @@ Hard constraints from the rules doc:
   serial link; it is NOT the e-stop MCU (that's a separate Arduino Nano,
   see Safety architecture). Encoder part number/CPR confirmed 2026-09-24:
   Pololu #4843 (20.4:1 25D 12V HP gearmotor, 48 CPR motor-shaft encoder =
-  979.62 CPR at the gearbox output shaft). Exact Teensy pin assignment
-  still TBD — same pending-spec status as the RPLIDAR model below.
+  979.62 CPR at the gearbox output shaft). Teensy pins confirmed
+  2026-09-27: mounted on the front-left/front-right wheels (labeled LF/RF)
+  but electrically the "left"/"right" side encoders wheel_odom_node
+  expects — left A=23/B=22, right A=21/B=20 (`teensy_ws`'s
+  `LEFT_ENC_A_PIN`/etc).
 - Drive motors: Pololu #4843 (20.4:1 25D 12V HP gearmotor), one per wheel,
   paired 2-per-side onto the Pololu G2 driver's two channels (matches the
   DiffDrive plugin's per-side joint grouping above). Real spec (12V):
@@ -243,12 +248,12 @@ Laptop-first, Pi 5 for final integration:
   reliable: occasional dropped heartbeats point to a still-marginal
   physical connection on the feather's module that needs re-seating or
   soldering before this is race-ready.
-- Wheel encoder Teensy pin assignment TBD — real hardware not yet in hand;
-  the Teensy firmware in `teensy_ws` is written against a placeholder pin
-  assignment. Part number/CPR is no longer a placeholder — confirmed
-  2026-09-24 as Pololu #4843 (979.62 CPR at the gearbox output shaft);
-  `bot_odometry`'s wheel_odom_node's `ticks_per_rev` default is updated to
-  match (was a 1200 placeholder).
+- Wheel encoder Teensy pin assignment confirmed 2026-09-27 (see Hardware
+  above) — was TBD. Part number/CPR confirmed 2026-09-24 as Pololu #4843
+  (979.62 CPR at the gearbox output shaft); `bot_odometry`'s
+  wheel_odom_node's `ticks_per_rev` default is updated to match (was a
+  1200 placeholder). Board model (`teensy40` in `teensy_ws/platformio.ini`)
+  is still a working assumption, not yet confirmed against real hardware.
 - Nav2 params: `robot_radius` now matches `bot.urdf.xacro`'s real footprint
   and the map-then-race launch wiring (mapping.launch.py / bringup.launch.py)
   is in place; costmap inflation and controller gains are being addressed
@@ -260,10 +265,11 @@ Laptop-first, Pi 5 for final integration:
   magnetometer fusion isn't corrupted by proximity to the motors/Pololu
   driver once mounted, and verify orientation_covariance (a rough
   placeholder, see Hardware above) against real calibration
-- Ultrasonic trigger/echo pin assignment on the Teensy TBD — same
-  pending-hardware status as the encoder pins; `teensy_ws`'s firmware and
-  `bot_odometry`'s wheel_odom_node are written against placeholder pins/
-  max-range values that need updating once sensors are wired up
+- Ultrasonic trigger/echo pin assignment on the Teensy confirmed 2026-09-27
+  (see Hardware above) — was TBD, and the design also dropped from three
+  sensors to two (left/right only) in the same change. `max_range_m`/field
+  of view in `bot_odometry`'s wheel_odom_node are still unverified
+  placeholders against the actual sensor datasheet.
 - Frontier exploration still drives slowly/unreliably in sim even after the
   goal-placement bug below was fixed — see "Frontier exploration
   reliability investigation" below; current lead suspect is dev-machine

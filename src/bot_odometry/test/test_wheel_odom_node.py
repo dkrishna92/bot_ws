@@ -73,7 +73,7 @@ def _capture_range_publishers(node):
 def test_ultrasonic_line_publishes_converted_distances(node):
     published = _capture_range_publishers(node)
     # 1000us round trip -> ~0.1715m at 343 m/s
-    node._on_line("U,1000,1000,1000,0")
+    node._on_line("U,1000,1000,0")
     for name, msgs in published.items():
         assert len(msgs) == 1
         assert msgs[0].range == pytest.approx(0.1715, rel=1e-3)
@@ -82,13 +82,13 @@ def test_ultrasonic_line_publishes_converted_distances(node):
 
 def test_ultrasonic_timeout_sentinel_reports_out_of_range(node):
     published = _capture_range_publishers(node)
-    node._on_line("U,0,0,0,0")
+    node._on_line("U,0,0,0")
     for msgs in published.values():
         assert msgs[0].range == pytest.approx(5.0)  # max_range (4.0) + 1.0 sentinel
 
 
 def test_malformed_ultrasonic_line_is_ignored(node):
     published = _capture_range_publishers(node)
-    node._on_line("U,not,a,number,0")
+    node._on_line("U,not,a,0")
     for msgs in published.values():
         assert msgs == []
