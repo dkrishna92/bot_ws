@@ -273,14 +273,15 @@ def test_save_checkpoint_uses_checkpoint_path_by_default():
     assert "checkpoint" in msg
 
 
-def test_save_checkpoint_uses_explicit_name_when_given():
+def test_save_checkpoint_resolves_bare_name_under_maps_dir():
     node = _make_node()
     node._serialize_client = _FakeSerializeClient()
 
-    ok, _ = node.save_checkpoint("my_custom_checkpoint")
+    ok, msg = node.save_checkpoint("my_custom_checkpoint")
 
     assert ok is True
-    assert node._serialize_client.last_request.filename == "my_custom_checkpoint"
+    assert node._serialize_client.last_request.filename == "src/bot_bringup/config/maps/my_custom_checkpoint"
+    assert "my_custom_checkpoint" in msg
 
 
 def test_save_checkpoint_reports_failure_when_service_unavailable():
@@ -291,6 +292,17 @@ def test_save_checkpoint_reports_failure_when_service_unavailable():
 
     assert ok is False
     assert "not available" in msg
+
+
+def test_save_checkpoint_rejects_name_with_slash():
+    node = _make_node()
+    node._serialize_client = _FakeSerializeClient()
+
+    ok, msg = node.save_checkpoint("../etc/passwd")
+
+    assert ok is False
+    assert "invalid map name" in msg
+    assert node._serialize_client.last_request is None
 
 
 # save_final_map must use save_map (not serialize_map) -- its .pgm/.yaml
@@ -308,14 +320,37 @@ def test_save_final_map_uses_map_save_path_by_default():
     assert "final map" in msg
 
 
-def test_save_final_map_uses_explicit_name_when_given():
+def test_save_final_map_resolves_bare_name_under_maps_dir():
     node = _make_node()
     node._save_map_client = _FakeSaveMapClient()
 
-    ok, _ = node.save_final_map("my_custom_map")
+    ok, msg = node.save_final_map("my_custom_map")
 
     assert ok is True
-    assert node._save_map_client.last_request.name.data == "my_custom_map"
+    assert node._save_map_client.last_request.name.data == "src/bot_bringup/config/maps/my_custom_map"
+    assert "my_custom_map" in msg
+
+
+def test_save_final_map_rejects_name_with_slash():
+    node = _make_node()
+    node._save_map_client = _FakeSaveMapClient()
+
+    ok, msg = node.save_final_map("sub/dir")
+
+    assert ok is False
+    assert "invalid map name" in msg
+    assert node._save_map_client.last_request is None
+
+
+def test_save_final_map_treats_blank_name_as_default():
+    node = _make_node()
+    node._map_save_path = "src/bot_bringup/config/maps/map"
+    node._save_map_client = _FakeSaveMapClient()
+
+    ok, _ = node.save_final_map("   ")
+
+    assert ok is True
+    assert node._save_map_client.last_request.name.data == "src/bot_bringup/config/maps/map"
 
 
 def test_save_final_map_reports_failure_when_service_unavailable():

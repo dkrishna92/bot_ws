@@ -91,6 +91,11 @@ from slam_toolbox.srv import SaveMap, SerializePoseGraph
 
 TELEOP_STALE_S = 0.5  # zero cmd_vel if the browser stops sending for this long
 SAVE_MAP_TIMEOUT_S = 10.0
+# Workspace-relative -- matches mapping.launch.py's own maps directory.
+# Custom map names typed into the dashboard resolve to a path here (see
+# WebControlNode._resolve_map_name), so saving under a new name never
+# writes outside this directory.
+MAPS_DIR = "src/bot_bringup/config/maps"
 
 
 def _png_chunk(tag: bytes, data: bytes) -> bytes:
@@ -333,6 +338,23 @@ class WebControlNode(Node):
             return False, f"{service_label} call timed out"
         return True, None
 
+    def _resolve_map_name(self, name: str | None, default_path: str):
+        """Turn a bare name typed in the dashboard (e.g. "obstacle_v2") into
+        a full workspace-relative path prefix alongside the other saved
+        maps, so callers don't have to know/type
+        src/bot_bringup/config/maps/ each time -- and don't get to escape
+        that directory either. Empty/missing name keeps the old
+        always-overwrite default. Returns (path_or_None, error_or_None).
+        """
+        if not name:
+            return default_path, None
+        name = name.strip()
+        if not name:
+            return default_path, None
+        if "/" in name or "\\" in name or name in (".", ".."):
+            return None, f"invalid map name {name!r} -- use a bare filename, no slashes"
+        return f"{MAPS_DIR}/{name}", None
+
     def save_checkpoint(self, name: str | None):
         """Checkpoint the in-progress map via slam_toolbox's serialize_map
         service -- does not stop mapping. Unlike save_map (a flattened
@@ -340,29 +362,41 @@ class WebControlNode(Node):
         (.posegraph/.data), which is what slam_toolbox's map_file_name
         startup parameter needs to genuinely continue from later (see this
         file's module docstring's IMPORTANT note for why save_map alone
-        can't do this, found 2026-09-27).
+        can't do this, found 2026-09-27). name is an optional bare filename
+        (e.g. "obstacle_v2") to save alongside the default checkpoint
+        instead of overwriting it -- see _resolve_map_name.
         """
-        name = name or self._checkpoint_path
+        path, err = self._resolve_map_name(name, self._checkpoint_path)
+        if err:
+            return False, err
         request = SerializePoseGraph.Request()
-        request.filename = name
+        request.filename = path
         ok, err = self._call_and_wait(self._serialize_client, request, "slam_toolbox serialize_map")
         if not ok:
             return False, err
-        return True, f"saved checkpoint '{name}' (resumable via Resume Mapping Run)"
+        return True, f"saved checkpoint '{path}' (resumable via Resume Mapping Run)"
 
     def save_final_map(self, name: str | None):
         """Export the current map via slam_toolbox's save_map service --
         the flattened .pgm/.yaml pair bringup.launch.py's amcl/map_server
         actually load for racing. Not resumable by a later mapping run --
-        use save_checkpoint for that instead.
+        use save_checkpoint for that instead. name is an optional bare
+        filename (e.g. "obstacle_v2") to save alongside the default map
+        instead of overwriting it -- see _resolve_map_name. Note:
+        bringup.launch.py always races against config/maps/map.yaml
+        specifically, so a non-default name here needs renaming/copying
+        into place (or nav2_params.yaml's map arg changed) before a race
+        run will actually use it.
         """
-        name = name or self._map_save_path
+        path, err = self._resolve_map_name(name, self._map_save_path)
+        if err:
+            return False, err
         request = SaveMap.Request()
-        request.name = String(data=name)
+        request.name = String(data=path)
         ok, err = self._call_and_wait(self._save_map_client, request, "slam_toolbox save_map")
         if not ok:
             return False, err
-        return True, f"saved final map as '{name}' (ready for bringup.launch.py)"
+        return True, f"saved final map as '{path}' (ready for bringup.launch.py)"
 
     def start_launch(self, target: str, resume: bool = False, resume_pose: str | None = None):
         with self._lock:

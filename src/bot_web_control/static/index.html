@@ -39,6 +39,9 @@
       <label>y <input type="number" id="poseY" value="0.0" step="0.1" style="width:5rem;"></label>
       <label>yaw (rad) <input type="number" id="poseYaw" value="0.0" step="0.1" style="width:5rem;"></label>
       <hr style="border-color:#444; width:100%;">
+      <label>Map name (optional -- blank overwrites the default file each time)
+        <input type="text" id="mapName" placeholder="e.g. obstacle_v2" style="width:12rem;">
+      </label>
       <div><button id="btnSaveCheckpoint">Save Checkpoint (to resume later)</button></div>
       <div><button id="btnSaveFinalMap">Save Final Map (for racing)</button></div>
     </div>
@@ -160,7 +163,12 @@ document.getElementById('btnMappingNew').addEventListener('click', () => startMa
 document.getElementById('btnMappingResume').addEventListener('click', () => startMapping(true));
 
 function saveTo(endpoint) {
-  fetch(endpoint, { method: 'POST' })
+  const name = document.getElementById('mapName').value.trim();
+  fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: name || null })
+  })
     .then(r => r.json())
     .then(s => alert(s.message));
 }
