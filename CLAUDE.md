@@ -162,7 +162,9 @@ everything into `bot_bringup`:
   zeroing), saves/resumes slam_toolbox checkpoints, and renders `/map`.
   Dev/ops convenience only — its Stop is not an e-stop. Stop runs
   `clean_robot.sh` (or `clean_sim.sh` in sim) when `workspace_root` is
-  set; both scripts exclude `bot_web_control` so the dashboard survives.
+  set, passing `--keep-dashboard` so the scripts don't kill the dashboard
+  itself. Run by hand without that flag, both scripts stop the dashboard
+  too (2026-09-27).
   See `src/bot_web_control/README.md`.
 
 Reasoning: each node has different hardware/library dependencies (pigpio,

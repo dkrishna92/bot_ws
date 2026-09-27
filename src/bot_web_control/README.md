@@ -47,7 +47,7 @@ across many runs.
 | --- | --- |
 | **Start (bringup)** | Runs `ros2 launch bot_bringup bringup.launch.py` (the race launch) with this dashboard's `use_sim` and `world`. |
 | **Mapping Run (teleop)** | Runs `mapping.launch.py teleop:=true`: SLAM builds a map while you drive with the teleop controls. With **Resume from checkpoint** ticked, it continues from the saved checkpoint map at the pose in the x / y / yaw fields instead of starting empty. |
-| **Stop** | Sends Ctrl-C (SIGINT) to the running launch, force-kills it after 5 s, publishes a zero `/cmd_vel`, and, if `workspace_root` is set, runs `clean_robot.sh` (robot) or `clean_sim.sh` (sim) to catch leftover processes. |
+| **Stop** | Sends Ctrl-C (SIGINT) to the running launch, force-kills it after 5 s, publishes a zero `/cmd_vel`, and, if `workspace_root` is set, runs `clean_robot.sh` (robot) or `clean_sim.sh` (sim) to catch leftover processes. It passes `--keep-dashboard`, so the dashboard itself keeps running. |
 | **Save Map (checkpoint)** | Calls slam_toolbox's `/slam_toolbox/save_map` to save the in-progress map as the checkpoint without ending the mapping run. |
 | **x / y / yaw (rad)** | The robot's pose in the checkpoint map, used when resuming. It must be where the robot actually was when the checkpoint was saved: read it with `ros2 run tf2_ros tf2_echo map base_link` before saving. On the real robot, place the robot back at that pose before resuming. |
 | **Teleop** | Hold **W / S** to drive forward / back and **A / D** to turn left / right (combine for arcs), or hold the arrow buttons. The page sends commands every 100 ms while a key or button is held. |

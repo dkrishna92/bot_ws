@@ -447,13 +447,13 @@ class WebControlNode(Node):
             stopped_any = True
         # Best-effort thorough sweep -- catches anything the process-group
         # kill above missed. On the robot, clean_robot.sh also frees the
-        # sensors and drives the motor pins low; both scripts skip
-        # bot_web_control so this dashboard survives its own Stop.
+        # sensors and drives the motor pins low. --keep-dashboard stops the
+        # scripts from matching (and killing) this dashboard itself.
         if self._workspace_root:
             script_name = "clean_sim.sh" if self._use_sim else "clean_robot.sh"
             script = os.path.join(self._workspace_root, "scripts", script_name)
             if os.path.isfile(script):
-                subprocess.run([script], cwd=self._workspace_root,
+                subprocess.run([script, "--keep-dashboard"], cwd=self._workspace_root,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         # Zero cmd_vel immediately rather than waiting for the watchdog tick.
         self._cmd_pub.publish(Twist())

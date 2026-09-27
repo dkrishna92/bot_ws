@@ -82,8 +82,13 @@ Troubleshooting:
   nodes holding the pins / lidar port. Run `./scripts/clean_robot.sh`: it
   stops this workspace's nodes and anything holding a sensor (lidar/Teensy
   serial, IMU I2C bus, motor GPIO, OAK-D USB), drives the motor pins low,
-  then runs `clean_sim.sh` for the general ROS cleanup. Run it before every
-  launch on the robot (`clean_sim.sh` alone is for the laptop/sim).
+  then runs `clean_sim.sh` for the general ROS cleanup. It also stops the
+  web dashboard; add `--keep-dashboard` to leave it running. Run it before
+  every launch on the robot (`clean_sim.sh` alone is for the laptop/sim).
+- **Dashboard: "Address already in use"** -- a dashboard is already
+  running on that port (`ss -ltnp | grep 8080` shows it). Use that one,
+  stop it (`./scripts/clean_robot.sh`, or Ctrl-C in its terminal), or pick
+  another port with `http_port:=8081`.
 - **IMU not on bus 3** -- check `/dev/i2c-3` exists (needs
   `dtoverlay=i2c3-pi5,pins_14_15` in `/boot/firmware/config.txt` + reboot;
   `setup_pi.sh` adds it). Don't use I2C1 (header pins 3/5): on this Pi it

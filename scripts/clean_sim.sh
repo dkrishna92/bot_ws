@@ -21,7 +21,8 @@
 # something to run on a shared machine with unrelated ROS 2 processes.
 #
 # Usage:
-#   scripts/clean_sim.sh
+#   scripts/clean_sim.sh                   # also stops the web dashboard
+#   scripts/clean_sim.sh --keep-dashboard  # leaves bot_web_control running
 #
 # Exit code 0: environment is clean, safe to launch.
 # Exit code 1: some process(es) survived even SIGKILL -- do not launch;
@@ -30,6 +31,13 @@
 
 set -uo pipefail
 
+# --keep-dashboard: leave bot_web_control running. The dashboard's own Stop
+# button runs this script with it; without it, the dashboard would match
+# "ros2 launch" / install/ below and kill itself. Run by hand (no flag), the
+# dashboard is stopped too, like everything else.
+KEEP_DASHBOARD=0
+[ "${1:-}" = "--keep-dashboard" ] && KEEP_DASHBOARD=1
+
 WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # "$WORKSPACE_ROOT/install/" catches every node built from this workspace
@@ -37,13 +45,10 @@ WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PATTERN="gz sim|gz-sim|ros2 launch|nav2_|ekf_node|component_container|slam_toolbox|frontier_explore|robot_state_publisher|parameter_bridge|lifecycle_manager|opennav_docking|rviz2|map_saver|sllidar_node|rplidar_composition|$WORKSPACE_ROOT/install/"
 
 list_pids() {
-    # bot_web_control is excluded: its dashboard runs this script from its
-    # own Stop button, and would otherwise match "ros2 launch" / install/
-    # and kill itself.
     # grep -v grep excludes this pipeline's own grep invocation (its
     # command line literally contains the pattern text above, so it would
     # otherwise match itself).
-    ps aux | grep -E "$PATTERN" | grep -v grep | grep -v bot_web_control | awk '{print $2}'
+    ps aux | grep -E "$PATTERN" | grep -v grep | { if [ "$KEEP_DASHBOARD" = 1 ]; then grep -v bot_web_control; else cat; fi; } | awk '{print $2}'
 }
 
 all_pids() {

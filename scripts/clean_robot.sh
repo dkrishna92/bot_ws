@@ -16,7 +16,8 @@
 # motor_node logs "GPIO busy" and never drives.
 #
 # Usage (on the Pi, before every launch):
-#   scripts/clean_robot.sh
+#   scripts/clean_robot.sh                   # also stops the web dashboard
+#   scripts/clean_robot.sh --keep-dashboard  # leaves bot_web_control running
 #
 # Exit code 0: sensors free and environment clean, safe to launch.
 # Exit code 1: something survived SIGKILL or still holds a sensor (e.g.
@@ -24,6 +25,13 @@
 #              Teensy -- needs sudo); do not launch, investigate manually.
 
 set -uo pipefail
+
+# --keep-dashboard: leave bot_web_control running. The dashboard's own Stop
+# button runs this script with it; without it, the dashboard would match
+# "ros2 launch" / install/ below and kill itself. Run by hand (no flag), the
+# dashboard is stopped too, like everything else.
+KEEP_DASHBOARD=0
+[ "${1:-}" = "--keep-dashboard" ] && KEEP_DASHBOARD=1
 
 WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -38,11 +46,8 @@ GPIO_CHIP=gpiochip4
 MOTOR_PINS="12 13 24 25 22 23"
 
 list_pids() {
-    # bot_web_control is excluded: its dashboard runs this script from its
-    # own Stop button, and would otherwise match "ros2 launch" / install/
-    # and kill itself.
     # grep -v grep: the pipeline's own grep would otherwise match itself.
-    ps aux | grep -E "$PATTERN" | grep -v grep | grep -v bot_web_control | awk '{print $2}'
+    ps aux | grep -E "$PATTERN" | grep -v grep | { if [ "$KEEP_DASHBOARD" = 1 ]; then grep -v bot_web_control; else cat; fi; } | awk '{print $2}'
 }
 
 # Sensor device nodes that only one process can own at a time. Resolved to
@@ -118,7 +123,7 @@ fi
 
 echo
 echo "== General ROS 2 cleanup (clean_sim.sh) =="
-"$WORKSPACE_ROOT/scripts/clean_sim.sh"
+"$WORKSPACE_ROOT/scripts/clean_sim.sh" "$@"
 sim_status=$?
 
 holders="$(list_device_holders)"
