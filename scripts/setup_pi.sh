@@ -76,15 +76,18 @@ udevadm control --reload-rules
 udevadm trigger
 
 echo "== I2C3 for the IMU"
-# BNO055 lives on I2C3 (GPIO22/23, header pins 15/16): the default I2C1 on
-# GPIO2/3 times out on this Pi even with nothing attached. Takes effect
-# after a reboot.
+# BNO055 lives on I2C3 routed to GPIO14/15 (header pins 8 SDA / 10 SCL):
+# the default I2C1 on GPIO2/3 times out on this Pi even with nothing
+# attached, and GPIO22/23 belong to the Pololu G2 motor HAT (motor SLP).
+# Takes effect after a reboot.
 CONFIG=/boot/firmware/config.txt
-if ! grep -q "^dtoverlay=i2c3-pi5,pins_22_23" "$CONFIG"; then
+if ! grep -q "^dtoverlay=i2c3-pi5,pins_14_15" "$CONFIG"; then
     cp "$CONFIG" "$CONFIG.bak.$(date +%Y%m%d%H%M%S)"
+    # Drop the old routing onto the motor HAT's SLP pins, if present
+    sed -i '/^dtoverlay=i2c3-pi5,pins_22_23/d' "$CONFIG"
     # Append under an explicit [all] so it isn't caught by a [pi4]/[cm4] section
-    printf '\n[all]\ndtoverlay=i2c3-pi5,pins_22_23\n' >> "$CONFIG"
-    echo "  added I2C3 overlay -- REBOOT required"
+    printf '\n[all]\ndtoverlay=i2c3-pi5,pins_14_15\n' >> "$CONFIG"
+    echo "  I2C3 overlay set to GPIO14/15 -- REBOOT required"
 fi
 
 echo "== rosdep"

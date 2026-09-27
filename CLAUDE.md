@@ -44,7 +44,18 @@ Hard constraints from the rules doc:
   self-returns under 0.32 m — measure and update it.
 - Motor driver: Pololu Dual G2 High-Power Motor Driver 18v18 — PWM + DIR +
   SLEEP digital I/O, NO serial/I2C interface (this was a corrected mistake
-  early on — don't reintroduce a serial-protocol assumption for this board)
+  early on — don't reintroduce a serial-protocol assumption for this board).
+  It's the **Raspberry Pi HAT version, so its pins are fixed by the board**
+  (BCM GPIO): PWM 12/13, DIR 24/25, SLP 22/23, FLT 5/6 (driver's
+  open-drain fault output, read with a Pi pull-up; low = fault); motor 1 =
+  left, motor 2 = right. Confirmed 2026-09-27. Before that, `motor_node`
+  used a guessed map (DIR 5/16, SLEEP 6/19): it drove the FLT pins as
+  outputs, never drove the real DIR/SLP pins, and the IMU's I2C bus sat on
+  the SLP pins -- so direction never changed and the driver never slept.
+  `scripts/motor_test.py` checks each motor/direction against the
+  encoders. The motors are mounted mirror-image, so the right channel is
+  inverted in software (`motor_node`'s `channel_b_inverted: true`, same in
+  the test script): a positive command drives both wheels forward.
 - Ultrasonic: HC-SR04-class sensors, trigger/echo timing. Moved from the
   Pi's bit-banged RPi.GPIO (2026-09-20) onto the same Teensy that reads
   wheel encoders, reporting raw echo pulse widths over the same USB serial
@@ -65,8 +76,10 @@ Hard constraints from the rules doc:
   979.62 CPR at the gearbox output shaft). Teensy pins confirmed
   2026-09-27: mounted on the front-left/front-right wheels (labeled LF/RF)
   but electrically the "left"/"right" side encoders wheel_odom_node
-  expects — left A=23/B=22, right A=21/B=20 (`teensy_ws`'s
-  `LEFT_ENC_A_PIN`/etc).
+  expects — left A=20/B=21, right A=22/B=23, meter-checked (`teensy_ws`'s
+  `LEFT_ENC_A_PIN`/etc; an earlier note here had the sides and A/B
+  swapped). Read via the analog workaround until the dividers are fixed —
+  see Open items.
 - Drive motors: Pololu #4843 (20.4:1 25D 12V HP gearmotor), one per wheel,
   paired 2-per-side onto the Pololu G2 driver's two channels (matches the
   DiffDrive plugin's per-side joint grouping above). Real spec (12V):
@@ -80,13 +93,17 @@ Hard constraints from the rules doc:
 - IMU: Bosch BNO055 — 9-DOF (accel + gyro + magnetometer) with onboard
   sensor fusion; outputs an absolute, magnetically-referenced orientation
   directly from the chip, not just raw gyro. Interface decided (2026-09-20):
-  I2C. **Moved to I2C3 on GPIO22/23 (header pins 15/16) on 2026-09-25**:
-  on the race Pi, I2C1 (GPIO2/3, pins 3/5) logs "controller timed out"
-  even with nothing attached, so don't move it back. Needs
-  `dtoverlay=i2c3-pi5,pins_22_23` in `/boot/firmware/config.txt`
-  (`setup_pi.sh` adds it); `hardware.launch.py`'s `imu_i2c_bus` arg
-  (default 3) selects the bus. Verified on hardware 2026-09-25: chip ID
-  0xA0 at 0x28, `/imu` at 50 Hz, ~9.4 m/s² on +z at rest. Real driver node now exists: `bot_imu`'s bno055_node (NDOF
+  I2C, on **I2C3 routed to GPIO14/15 (header pins 8 SDA / 10 SCL)** as of
+  2026-09-27. History: I2C1 (GPIO2/3, pins 3/5) logs "controller timed
+  out" on the race Pi even with nothing attached, so the IMU moved to
+  I2C3 on GPIO22/23 (2026-09-25) -- but GPIO22/23 turned out to be the
+  Pololu G2 motor HAT's SLP pins, so it moved again to GPIO14/15 (free:
+  the console is on tty1, no serial getty). Needs
+  `dtoverlay=i2c3-pi5,pins_14_15` in `/boot/firmware/config.txt`
+  (`setup_pi.sh` adds it and removes the old pins_22_23 line);
+  `hardware.launch.py`'s `imu_i2c_bus` arg (default 3) selects the bus.
+  Verified on I2C3 2026-09-25: chip ID 0xA0 at 0x28, `/imu` at 50 Hz,
+  ~9.4 m/s² on +z at rest (re-verify after the rewire). Real driver node now exists: `bot_imu`'s bno055_node (NDOF
   fusion mode, smbus2). Mounting location still not decided. Fused into
   `robot_localization`'s EKF for yaw/yaw-rate only (see
   `bot_bringup/config/ekf_params.yaml`) — wheel odometry keeps

@@ -55,12 +55,24 @@ class MotorNode(Node):
         self.declare_parameter("cmd_vel_timeout_s", 0.3)
         self.declare_parameter("track_width_m", 0.32)
         self.declare_parameter("max_linear_speed_mps", 2.0)
+        # Pin map fixed by the Pololu Dual G2 for Raspberry Pi board (BCM GPIO
+        # numbers): motor 1 = channel A = left, motor 2 = channel B = right.
+        # FLT is the driver's open-drain fault output (low = fault), read here
+        # with the Pi's pull-up; SLP must be high to enable a channel.
         self.declare_parameter("channel_a_pwm_pin", 12)
-        self.declare_parameter("channel_a_dir_pin", 5)
-        self.declare_parameter("channel_a_sleep_pin", 6)
+        self.declare_parameter("channel_a_dir_pin", 24)
+        self.declare_parameter("channel_a_sleep_pin", 22)
+        self.declare_parameter("channel_a_fault_pin", 5)
         self.declare_parameter("channel_b_pwm_pin", 13)
-        self.declare_parameter("channel_b_dir_pin", 16)
-        self.declare_parameter("channel_b_sleep_pin", 19)
+        self.declare_parameter("channel_b_dir_pin", 25)
+        self.declare_parameter("channel_b_sleep_pin", 23)
+        self.declare_parameter("channel_b_fault_pin", 6)
+        # The two motors face opposite ways (mirror-image mounting), so the
+        # same DIR level turns them in opposite directions. Invert the right
+        # channel so a positive command drives both wheels forward (checked on
+        # the robot 2026-09-27 with scripts/motor_test.py).
+        self.declare_parameter("channel_a_inverted", False)
+        self.declare_parameter("channel_b_inverted", True)
 
         self._freq = min(self.get_parameter("pwm_frequency_hz").value, LGPIO_MAX_PWM_HZ)
         self._max_duty = self.get_parameter("max_duty_cycle").value
@@ -72,16 +84,21 @@ class MotorNode(Node):
             "pwm": self.get_parameter("channel_a_pwm_pin").value,
             "dir": self.get_parameter("channel_a_dir_pin").value,
             "sleep": self.get_parameter("channel_a_sleep_pin").value,
+            "fault": self.get_parameter("channel_a_fault_pin").value,
+            "inverted": self.get_parameter("channel_a_inverted").value,
         }
         self._chan_b = {
             "pwm": self.get_parameter("channel_b_pwm_pin").value,
             "dir": self.get_parameter("channel_b_dir_pin").value,
             "sleep": self.get_parameter("channel_b_sleep_pin").value,
+            "fault": self.get_parameter("channel_b_fault_pin").value,
+            "inverted": self.get_parameter("channel_b_inverted").value,
         }
 
         self._last_cmd: Twist | None = None
         self._last_cmd_time = 0.0
         self._fault = False
+        self._driver_fault = False
 
         self._h = None
         if self.get_parameter("dry_run").value:
@@ -97,6 +114,7 @@ class MotorNode(Node):
                     lgpio.gpio_claim_output(self._h, chan["dir"], 0)
                     lgpio.gpio_claim_output(self._h, chan["pwm"], 0)
                     lgpio.gpio_claim_output(self._h, chan["sleep"], 1)  # wake
+                    lgpio.gpio_claim_input(self._h, chan["fault"], lgpio.SET_PULL_UP)
             except lgpio.error as e:
                 self.get_logger().error(f"could not open/claim gpiochip{chip}: {e} -- "
                                         "no hardware output (check gpio_chip and group membership)")
@@ -126,16 +144,32 @@ class MotorNode(Node):
         if chan.get("last_duty") == duty:
             return
         chan["last_duty"] = duty
-        lgpio.gpio_write(self._h, chan["dir"], 1 if duty >= 0 else 0)
+        forward = (duty >= 0) != chan["inverted"]
+        lgpio.gpio_write(self._h, chan["dir"], 1 if forward else 0)
         lgpio.tx_pwm(self._h, chan["pwm"], self._freq, abs(duty) * 100.0)
 
     def _stop_all(self) -> None:
         self._set_channel(self._chan_a, 0.0)
         self._set_channel(self._chan_b, 0.0)
 
+    def _read_driver_fault(self) -> bool:
+        """True while either G2 channel pulls its FLT pin low."""
+        if self._h is None:
+            return False
+        faulted = [name for name, chan in (("left", self._chan_a), ("right", self._chan_b))
+                   if lgpio.gpio_read(self._h, chan["fault"]) == 0]
+        if faulted and not self._driver_fault:
+            self.get_logger().error(f"motor driver FLT asserted ({', '.join(faulted)}) -- "
+                                    "stopping motors (over-current, over-temperature or under-voltage)")
+        elif not faulted and self._driver_fault:
+            self.get_logger().info("motor driver FLT cleared")
+        self._driver_fault = bool(faulted)
+        return self._driver_fault
+
     def _tick(self) -> None:
         stale = (time.monotonic() - self._last_cmd_time) > self._timeout_s
-        if self._fault or stale or self._last_cmd is None:
+        driver_fault = self._read_driver_fault()
+        if self._fault or driver_fault or stale or self._last_cmd is None:
             self._stop_all()
             return
 

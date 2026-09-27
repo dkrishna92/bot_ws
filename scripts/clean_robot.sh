@@ -31,10 +31,11 @@ WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # (motor_node, watchdog_node, wheel_odom_node, bno055_node, sllidar_node, ...).
 PATTERN="ros2 launch|sllidar_node|rplidar_composition|component_container|$WORKSPACE_ROOT/install/"
 
-# Motor driver pins (motor_node defaults: PWM 12/13, DIR 5/16, SLEEP 6/19)
-# and the RP1 header GPIO chip -- keep in sync with bot_motor/motor_node.py.
+# Motor driver pins (Pololu Dual G2 for RPi: PWM 12/13, DIR 24/25, SLP 22/23;
+# FLT 5/6 are driver outputs and left alone) and the RP1 header GPIO chip --
+# keep in sync with bot_motor/motor_node.py.
 GPIO_CHIP=gpiochip4
-MOTOR_PINS="12 13 5 16 6 19"
+MOTOR_PINS="12 13 24 25 22 23"
 
 list_pids() {
     # bot_web_control is excluded: its dashboard runs this script from its

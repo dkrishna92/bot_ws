@@ -80,9 +80,10 @@ def generate_launch_description():
             output='screen',
             parameters=[{'serial_port': LaunchConfiguration('teensy_port')}],
         ),
-        # BNO055 is on I2C3 (GPIO22/23, header pins 15/16), not the default
+        # BNO055 is on I2C3 routed to GPIO14/15 (header pins 8/10), not the default
         # I2C1 on GPIO2/3 -- I2C1 on this Pi times out with nothing attached.
-        # Needs `dtoverlay=i2c3-pi5,pins_22_23` in /boot/firmware/config.txt.
+        # Needs `dtoverlay=i2c3-pi5,pins_14_15` in /boot/firmware/config.txt
+        # (GPIO22/23 are the Pololu G2 motor HAT's SLP pins).
         Node(
             package='bot_imu',
             executable='bno055_node',
