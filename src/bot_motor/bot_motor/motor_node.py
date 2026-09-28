@@ -68,11 +68,22 @@ class MotorNode(Node):
         self.declare_parameter("channel_b_sleep_pin", 23)
         self.declare_parameter("channel_b_fault_pin", 6)
         # The two motors face opposite ways (mirror-image mounting), so the
-        # same DIR level turns them in opposite directions. Invert the right
-        # channel so a positive command drives both wheels forward (checked on
-        # the robot 2026-09-27 with scripts/motor_test.py).
-        self.declare_parameter("channel_a_inverted", False)
-        self.declare_parameter("channel_b_inverted", True)
+        # same DIR level turns them in opposite directions. Right channel was
+        # inverted for this reason (checked 2026-09-27), and left also
+        # inverted 2026-09-28 after a new left motor's leads landed reversed
+        # (scripts/motor_test.py caught it: left counted backwards on
+        # "forward"). Right flipped back to NOT inverted the same day: a
+        # direct visual check caught the right wheel spinning backwards
+        # relative to command even though motor_test.py said "OK" -- that
+        # script only checks self-consistency between commanded direction
+        # and encoder count, so it can't catch (and was fooled by) the
+        # motor's real direction AND the right encoder's sign both being
+        # wrong at once (see teensy_ws's RIGHT_ENCODER_SIGN fix for the
+        # other half of that). If a motor is ever rewired/replaced again,
+        # re-run motor_test.py AND visually watch the wheel -- don't trust
+        # the script's encoder-only verdict alone.
+        self.declare_parameter("channel_a_inverted", True)
+        self.declare_parameter("channel_b_inverted", False)
 
         self._freq = min(self.get_parameter("pwm_frequency_hz").value, LGPIO_MAX_PWM_HZ)
         self._max_duty = self.get_parameter("max_duty_cycle").value

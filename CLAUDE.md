@@ -53,9 +53,29 @@ Hard constraints from the rules doc:
   outputs, never drove the real DIR/SLP pins, and the IMU's I2C bus sat on
   the SLP pins -- so direction never changed and the driver never slept.
   `scripts/motor_test.py` checks each motor/direction against the
-  encoders. The motors are mounted mirror-image, so the right channel is
-  inverted in software (`motor_node`'s `channel_b_inverted: true`, same in
-  the test script): a positive command drives both wheels forward.
+  encoders. The motors are mounted mirror-image, so the right channel was
+  originally inverted in software (`motor_node`'s `channel_b_inverted`,
+  same in the test script) so a positive command drives both wheels
+  forward. **New motors installed 2026-09-28, both sides needed
+  re-calibrating, and the process caught a real gap in
+  `scripts/motor_test.py`'s methodology**:
+  - Left: `scripts/motor_test.py` caught it running backwards relative to
+    command (right unaffected at the time) -- its leads landed reversed
+    compared to the old motor. `channel_a_inverted` is now `true`.
+  - Right: `scripts/motor_test.py` reported "OK", but a direct visual
+    check of the wheel caught it spinning backwards relative to command
+    anyway. That script only checks *self-consistency* between commanded
+    direction and encoder count -- it can't distinguish "genuinely
+    correct" from "motor direction wrong AND encoder sign wrong,
+    cancelling out," which is exactly what had happened. Fixed with two
+    independent corrections: `channel_b_inverted` flipped back to `false`
+    (true motor direction), and the right encoder's sign inverted in
+    `teensy_ws` firmware itself (`RIGHT_ENCODER_SIGN`, not a Python-side
+    patch, so `scripts/motor_test.py`'s own direct reading of the raw `E`
+    line stays correct too). **Lesson: always visually confirm wheel
+    direction after a motor or encoder change, not just this script's
+    summary** -- re-run it (and watch the wheel) after any future
+    motor/encoder rewiring rather than assuming these polarities hold.
 - Ultrasonic: HC-SR04-class sensors, trigger/echo timing. Moved from the
   Pi's bit-banged RPi.GPIO (2026-09-20) onto the same Teensy that reads
   wheel encoders, reporting raw echo pulse widths over the same USB serial

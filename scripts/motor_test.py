@@ -38,9 +38,18 @@ CHANNELS = {
     "right": {"pwm": 13, "dir": 25, "sleep": 23},
 }
 FAULT_PINS = {"left": 5, "right": 6}
-# Same as motor_node's channel_*_inverted: the motors are mounted mirror-image,
-# so the right one needs the opposite DIR level to drive the robot forward.
-INVERTED = {"left": False, "right": True}
+# Same as motor_node's channel_*_inverted. Left inverted as of 2026-09-28
+# -- a new left motor's leads landed reversed relative to the old one.
+# Right flipped back to NOT inverted the same day -- a visual check caught
+# the wheel spinning backwards relative to command even though this
+# script's own encoder-based verdict said "OK" (it can only check
+# self-consistency between command and encoder count, so it was fooled by
+# the motor direction AND the right encoder's sign both being wrong at
+# once -- see teensy_ws's RIGHT_ENCODER_SIGN fix for the other half).
+# ALWAYS visually confirm wheel direction after a motor swap, not just
+# this script's summary -- re-run it if leads or encoders are ever
+# touched again.
+INVERTED = {"left": True, "right": False}
 # A moving wheel easily gives hundreds of counts per second (979.62 per
 # wheel turn); fewer than this during a step means it didn't really turn.
 MIN_COUNTS_TO_COUNT_AS_MOVING = 20
