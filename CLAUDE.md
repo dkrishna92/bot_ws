@@ -124,7 +124,11 @@ Hard constraints from the rules doc:
   `hardware.launch.py`'s `imu_i2c_bus` arg (default 3) selects the bus.
   Verified on I2C3 2026-09-25: chip ID 0xA0 at 0x28, `/imu` at 50 Hz,
   ~9.4 m/s² on +z at rest (re-verify after the rewire). Real driver node now exists: `bot_imu`'s bno055_node (NDOF
-  fusion mode, smbus2). Mounting location still not decided. Fused into
+  fusion mode, smbus2). Mounted 2026-09-28: 11.5 cm back from the chassis
+  front panel (not counting the OAK), on the centreline, 94 mm above
+  ground, with its X axis facing the BACK of the robot (Y right, Z up).
+  `bot.urdf.xacro`'s `imu_joint` encodes this as yaw = pi; the driver does
+  no axis remapping, so that transform is the only correction. Fused into
   `robot_localization`'s EKF for yaw/yaw-rate only (see
   `bot_bringup/config/ekf_params.yaml`) — wheel odometry keeps
   position/linear velocity. Simulated in Gazebo via `bot.urdf.xacro`'s
@@ -313,11 +317,13 @@ Laptop-first, Pi 5 for final integration:
   via an in-progress planner/controller A/B comparison rather than further
   hand-tuning DWB in isolation — see "Nav2 planner/controller comparison"
   below
-- BNO055: `bot_imu`'s bno055_node is written (I2C, NDOF mode) but untested
-  on real hardware; mounting location still undecided — verify NDOF
-  magnetometer fusion isn't corrupted by proximity to the motors/Pololu
-  driver once mounted, and verify orientation_covariance (a rough
-  placeholder, see Hardware above) against real calibration
+- BNO055: mounted 2026-09-28 (see Hardware above), 94 mm off the ground
+  and ~9 cm behind the front axle, i.e. close to the front motors. Still
+  to verify: that NDOF magnetometer heading isn't disturbed by the motors/
+  Pololu driver when they're running, that the axis orientation in the
+  URDF matches the chip (turn left by hand: `/imu` angular_velocity.z
+  should go positive), and orientation_covariance (a rough placeholder,
+  see Hardware above) against real calibration
 - Ultrasonic trigger/echo pin assignment on the Teensy confirmed 2026-09-27
   (see Hardware above) — was TBD, and the design also dropped from three
   sensors to two (left/right only) in the same change. `max_range_m`/field

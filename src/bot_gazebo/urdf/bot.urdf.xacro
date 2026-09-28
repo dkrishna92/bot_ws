@@ -37,6 +37,10 @@
        sits on the scan plane, estimated 13 mm below the top of the head
        (not measured; check against the window slit on the rotating head). -->
   <xacro:property name="oak_front_x" value="${base_length/2}"/>
+  <!-- The chassis front panel itself, 3 cm behind the OAK's front face
+       (the OAK stands proud of the panel, see above). Measure mount
+       positions "from the front panel" against this, not base_length/2. -->
+  <xacro:property name="chassis_front_x" value="${oak_front_x - 0.03}"/>
   <xacro:property name="lidar_radius" value="0.0385"/>
   <xacro:property name="lidar_body_height" value="0.03885"/>
   <xacro:property name="lidar_top_height" value="${oak_bottom_height + oak_height + 0.05}"/>
@@ -243,12 +247,17 @@
     <child link="camera_link"/>
   </joint>
 
-  <!-- IMU Joint, mounted flush at the chassis center (no offset needed
-       the way lidar/camera need clearance/forward placement), x-forward
-       z-up matching base_link's own axes so imu_link's orientation
-       readings need no extra rotation to interpret in base_link/odom. -->
+  <!-- IMU Joint, measured on the robot 2026-09-28: 11.5 cm back from
+       the chassis front panel (not counting the OAK), 12.5 cm in from the
+       chassis left side (not counting the tyres), 94 mm above ground.
+       Mounted with its X axis facing the BACK of the robot, Y right, Z up:
+       base_link turned 180 deg about Z, hence yaw = pi. bno055_node does
+       no axis remapping of its own, so this transform is the only thing
+       that turns the chip's readings into base_link's frame for
+       robot_localization. With yaw 0 here, the fused absolute heading
+       comes out 180 deg off. -->
   <joint name="imu_joint" type="fixed">
-    <origin xyz="0 0 ${base_height/2}" rpy="0 0 0"/>
+    <origin xyz="${chassis_front_x - 0.115} ${base_width/2 - 0.125} 0.094" rpy="0 0 ${pi}"/>
     <parent link="base_link"/>
     <child link="imu_link"/>
   </joint>
