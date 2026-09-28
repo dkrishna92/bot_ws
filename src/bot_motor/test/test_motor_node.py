@@ -71,3 +71,51 @@ def test_angular_velocity_differentiates_channels(node):
     calls = _capture_duty(node)
     node._tick()
     assert calls[0] < 0 < calls[1]  # left channel reverses, right advances
+
+
+class _FakeLgpio:
+    """Stand-in for the lgpio module -- dry_run=True short-circuits
+    _set_channel before it ever calls lgpio (self._h stays None), so
+    testing the deadband/min_duty_cycle logic below needs to actually
+    reach those calls instead."""
+    def __init__(self):
+        self.tx_pwm_calls = []
+
+    def gpio_write(self, h, pin, level):
+        pass
+
+    def tx_pwm(self, h, pin, freq, duty):
+        self.tx_pwm_calls.append(duty)
+
+
+def _make_reachable(node, monkeypatch):
+    """Point _set_channel at a fake lgpio and a non-None handle so its
+    body actually runs, without touching real GPIO."""
+    fake = _FakeLgpio()
+    monkeypatch.setattr("bot_motor.motor_node.lgpio", fake)
+    monkeypatch.setattr(node, "_h", object())
+    return fake
+
+
+def test_small_commanded_duty_is_clamped_to_min_duty_cycle(node, monkeypatch):
+    fake = _make_reachable(node, monkeypatch)
+
+    node._set_channel(node._chan_a, 0.01)  # much smaller than min_duty_cycle (0.25 default)
+
+    assert fake.tx_pwm_calls == [pytest.approx(25.0)]
+
+
+def test_duty_above_min_duty_cycle_is_unaffected(node, monkeypatch):
+    fake = _make_reachable(node, monkeypatch)
+
+    node._set_channel(node._chan_a, 0.5)
+
+    assert fake.tx_pwm_calls == [pytest.approx(50.0)]
+
+
+def test_zero_duty_is_not_clamped_up_to_min_duty_cycle(node, monkeypatch):
+    fake = _make_reachable(node, monkeypatch)
+
+    node._set_channel(node._chan_a, 0.0)
+
+    assert fake.tx_pwm_calls == [pytest.approx(0.0)]

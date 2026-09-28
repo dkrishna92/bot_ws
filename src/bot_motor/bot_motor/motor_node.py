@@ -52,6 +52,12 @@ class MotorNode(Node):
         self.declare_parameter("gpio_chip", 4)
         self.declare_parameter("pwm_frequency_hz", 10000)
         self.declare_parameter("max_duty_cycle", 0.9)
+        # Deadband compensation -- see _set_channel's comment. Starting
+        # value, 2026-09-28: NOT yet empirically tuned against the real
+        # motors/chassis weight -- raise it if the motor still whines
+        # without turning at this floor, lower it if it now jumps/lurches
+        # on small commanded velocities.
+        self.declare_parameter("min_duty_cycle", 0.25)
         self.declare_parameter("cmd_vel_timeout_s", 0.3)
         self.declare_parameter("track_width_m", 0.32)
         self.declare_parameter("max_linear_speed_mps", 2.0)
@@ -87,6 +93,7 @@ class MotorNode(Node):
 
         self._freq = min(self.get_parameter("pwm_frequency_hz").value, LGPIO_MAX_PWM_HZ)
         self._max_duty = self.get_parameter("max_duty_cycle").value
+        self._min_duty = self.get_parameter("min_duty_cycle").value
         self._timeout_s = self.get_parameter("cmd_vel_timeout_s").value
         self._track_width = self.get_parameter("track_width_m").value
         self._max_v = self.get_parameter("max_linear_speed_mps").value
@@ -157,7 +164,20 @@ class MotorNode(Node):
         chan["last_duty"] = duty
         forward = (duty >= 0) != chan["inverted"]
         lgpio.gpio_write(self._h, chan["dir"], 1 if forward else 0)
-        lgpio.tx_pwm(self._h, chan["pwm"], self._freq, abs(duty) * 100.0)
+        # Below min_duty_cycle, PWM is too weak to overcome static/scrub
+        # friction at all -- the motor draws current and whines in place
+        # instead of actually turning (real symptom, 2026-09-28, worst
+        # during in-place rotation: track_width_m is narrow enough that
+        # even Nav2's max_vel_theta maps to ~8% duty via the naive
+        # v/max_linear_speed_mps scaling below -- nowhere near this
+        # motor's stall-adjacent torque needs for scrub friction, see
+        # CLAUDE.md's Hardware section). Any nonzero commanded duty is
+        # clamped up to at least this floor instead of letting that
+        # scaling produce an arbitrarily weak signal.
+        effective_duty = abs(duty)
+        if effective_duty > 0.0:
+            effective_duty = max(effective_duty, self._min_duty)
+        lgpio.tx_pwm(self._h, chan["pwm"], self._freq, effective_duty * 100.0)
 
     def _stop_all(self) -> None:
         self._set_channel(self._chan_a, 0.0)
