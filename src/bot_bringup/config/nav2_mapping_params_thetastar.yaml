@@ -117,15 +117,15 @@ controller_server:
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: true
-      max_vel_x: 0.5
+      max_vel_x: 1.0
       min_vel_x: 0.0
       max_vel_y: 0.0
       min_vel_y: 0.0
-      max_vel_theta: 1.0
+      max_vel_theta: 2.0
       min_speed_xy: 0.0
-      max_speed_xy: 0.5
+      max_speed_xy: 1.0
       min_speed_theta: 0.0
-      max_speed_theta: 1.0
+      max_speed_theta: 2.0
       acc_lim_x: 2.5
       acc_lim_y: 0.0
       acc_lim_theta: 3.2
@@ -396,7 +396,7 @@ behavior_server:
     robot_base_frame: base_link
     transform_tolerance: 0.1
     simulate_ahead_time: 2.0
-    max_rotational_vel: 1.0
+    max_rotational_vel: 2.0
     min_rotational_vel: 0.4
     rotational_acc_lim: 3.2
 
@@ -463,3 +463,22 @@ docking_server:
     dock_plugins: ["simple_charging_dock"]
     simple_charging_dock:
       plugin: "opennav_docking::SimpleChargingDock"
+
+# Must be set explicitly: velocity_smoother sits between the controller and
+# /cmd_vel, and with no section here Nav2's built-in default caps linear
+# speed at 0.5 m/s regardless of the controller's limits. Reference-config
+# values except max/min_velocity, which match this file's controller caps.
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: True
+    smoothing_frequency: 20.0
+    scale_velocities: False
+    feedback: "OPEN_LOOP"
+    max_velocity: [1.0, 0.0, 2.0]
+    min_velocity: [-0.5, 0.0, -2.0]
+    max_accel: [2.5, 0.0, 3.2]
+    max_decel: [-2.5, 0.0, -3.2]
+    odom_topic: "odom"
+    odom_duration: 0.1
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0
