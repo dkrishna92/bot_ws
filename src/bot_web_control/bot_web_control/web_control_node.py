@@ -122,6 +122,11 @@ class WebControlNode(Node):
         self.declare_parameter("http_port", 8080)
         self.declare_parameter("default_linear_speed", 0.3)
         self.declare_parameter("default_angular_speed", 1.0)
+        # Hard caps on the speeds the dashboard's sliders can request --
+        # match the sliders' own max, but enforced here so a hand-crafted
+        # request can't exceed them either.
+        self.declare_parameter("max_linear_speed", 1.0)
+        self.declare_parameter("max_angular_speed", 3.0)
         self.declare_parameter("world", "speed_course_cfr")
         # Bool, not str -- launch_ros infers a bool from a LaunchConfiguration
         # whose resolved text is literally "true"/"false" when building the
@@ -149,6 +154,8 @@ class WebControlNode(Node):
 
         self._linear_speed = self.get_parameter("default_linear_speed").value
         self._angular_speed = self.get_parameter("default_angular_speed").value
+        self._max_linear_speed = self.get_parameter("max_linear_speed").value
+        self._max_angular_speed = self.get_parameter("max_angular_speed").value
         self._world = self.get_parameter("world").value
         self._use_sim = self.get_parameter("use_sim").value
         self._workspace_root = self.get_parameter("workspace_root").value
@@ -212,7 +219,14 @@ class WebControlNode(Node):
             def do_POST(self):
                 if self.path == "/api/cmd_vel":
                     body = self._read_json()
-                    node.on_teleop_cmd(float(body.get("linear", 0.0)), float(body.get("angular", 0.0)))
+                    lin_speed = body.get("linear_speed")
+                    ang_speed = body.get("angular_speed")
+                    node.on_teleop_cmd(
+                        float(body.get("linear", 0.0)),
+                        float(body.get("angular", 0.0)),
+                        float(lin_speed) if lin_speed is not None else None,
+                        float(ang_speed) if ang_speed is not None else None,
+                    )
                     self._send_json({"ok": True})
                 elif self.path == "/api/launch/bringup":
                     ok, msg = node.start_launch("bringup")
@@ -292,11 +306,19 @@ class WebControlNode(Node):
 
     # -- HTTP-facing operations ---------------------------------------------
 
-    def on_teleop_cmd(self, linear_frac: float, angular_frac: float) -> None:
-        """linear_frac/angular_frac are in [-1, 1]; scaled by the configured speeds."""
+    def on_teleop_cmd(self, linear_frac: float, angular_frac: float,
+                      linear_speed: float | None = None,
+                      angular_speed: float | None = None) -> None:
+        """linear_frac/angular_frac are in [-1, 1], scaled by the speeds the
+        dashboard's sliders send (or the startup defaults if a request
+        omits them), each capped at max_linear_speed/max_angular_speed."""
+        lin = self._linear_speed if linear_speed is None else linear_speed
+        ang = self._angular_speed if angular_speed is None else angular_speed
+        lin = max(0.0, min(self._max_linear_speed, lin))
+        ang = max(0.0, min(self._max_angular_speed, ang))
         msg = Twist()
-        msg.linear.x = max(-1.0, min(1.0, linear_frac)) * self._linear_speed
-        msg.angular.z = max(-1.0, min(1.0, angular_frac)) * self._angular_speed
+        msg.linear.x = max(-1.0, min(1.0, linear_frac)) * lin
+        msg.angular.z = max(-1.0, min(1.0, angular_frac)) * ang
         self._cmd_pub.publish(msg)
         with self._lock:
             self._last_teleop_time = time.time()

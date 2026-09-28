@@ -11,6 +11,8 @@ from __future__ import annotations
 import threading
 import zlib
 
+import pytest
+
 from nav_msgs.msg import OccupancyGrid
 
 from bot_web_control.web_control_node import WebControlNode, encode_grayscale_png
@@ -34,6 +36,8 @@ def _make_node(linear_speed=0.3, angular_speed=1.0):
     node._proc_label = None
     node._linear_speed = linear_speed
     node._angular_speed = angular_speed
+    node._max_linear_speed = 1.0
+    node._max_angular_speed = 3.0
     node._workspace_root = ""
     node._use_sim = True
     node._world = "speed_course_cfr"
@@ -128,6 +132,22 @@ def test_on_teleop_cmd_clamps_out_of_range_fractions():
     msg = node._cmd_pub.published[-1]
     assert msg.linear.x == 0.5
     assert msg.angular.z == -2.0
+
+
+def test_on_teleop_cmd_uses_slider_speeds_when_sent():
+    node = _make_node(linear_speed=0.3, angular_speed=1.0)
+    node.on_teleop_cmd(1.0, -1.0, linear_speed=0.8, angular_speed=2.5)
+    msg = node._cmd_pub.published[-1]
+    assert msg.linear.x == pytest.approx(0.8)
+    assert msg.angular.z == pytest.approx(-2.5)
+
+
+def test_on_teleop_cmd_caps_slider_speeds_at_max():
+    node = _make_node()
+    node.on_teleop_cmd(1.0, 1.0, linear_speed=50.0, angular_speed=50.0)
+    msg = node._cmd_pub.published[-1]
+    assert msg.linear.x == pytest.approx(1.0)
+    assert msg.angular.z == pytest.approx(3.0)
 
 
 def test_on_teleop_cmd_updates_watchdog_state():

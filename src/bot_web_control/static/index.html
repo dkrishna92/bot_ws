@@ -87,7 +87,7 @@ function currentCmd() {
   if (held.has('s')) lin -= 1;
   if (held.has('a')) ang += 1;
   if (held.has('d')) ang -= 1;
-  return { linear: lin, angular: ang };
+  return { linear: lin, angular: ang, linear_speed: linSpeed, angular_speed: angSpeed };
 }
 function sendCmd() {
   const c = currentCmd();
