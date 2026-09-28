@@ -5,11 +5,13 @@ pulses into sensor_msgs/Range.
 
 The Teensy (teensy_ws) reads two quadrature encoders -- one per side,
 matching bot.urdf.xacro's DiffDrive plugin's left_joint/right_joint
-grouping -- and three HC-SR04-class ultrasonic sensors, reporting both
-over one USB serial link as one line per sample:
+grouping -- and two HC-SR04-class ultrasonic sensors (left/right --
+design changed 2026-09-27 from an earlier three-sensor front-left/
+front-right/rear layout; the rear sensor was dropped, not just unwired),
+reporting both over one USB serial link as one line per sample:
 
     E,<left_ticks>,<right_ticks>,<micros>\n
-    U,<front_left_us>,<front_right_us>,<rear_us>,<micros>\n
+    U,<left_us>,<right_us>,<micros>\n
 
 Ultrasonic sensing moved onto this Teensy from the Pi (2026-09-20),
 retiring the old bot_ultrasonic package's bit-banged RPi.GPIO node. This
@@ -28,16 +30,18 @@ Publishes:
     odom0 with no downstream config changes. Does NOT publish TF:
     ekf_params.yaml (publish_tf: true) is the sole odom->base_link
     broadcaster, matching the sim path.
-  - sensor_msgs/Range on 'ultrasonic/<front_left|front_right|rear>' --
-    same topic names/shape as the old bot_ultrasonic node, so any future
-    Nav2 range_sensor_layer config can reference them unchanged.
+  - sensor_msgs/Range on 'ultrasonic/<left|right>' -- same topic naming
+    convention as the old bot_ultrasonic node (now with two sensors
+    instead of three), so any future Nav2 range_sensor_layer config can
+    reference them unchanged.
 
 wheel_radius_m/track_width_m below should stay numerically in sync with
 bot.urdf.xacro's wheel_radius/track_width properties. ticks_per_rev is the
 real encoder spec now (Pololu #4843: 48 CPR motor shaft x 20.4:1 gear ratio
-= 979.62 CPR gearbox output shaft) -- not a placeholder anymore, unlike the
-project's still-unconfirmed RPLIDAR baudrate and the ultrasonic trigger/echo
-pin assignment on the Teensy (see CLAUDE.md open items).
+= 979.62 CPR gearbox output shaft). Encoder and ultrasonic trigger/echo
+pin assignment on the Teensy is confirmed (2026-09-27, see teensy_ws) --
+the project's RPLIDAR baudrate remains the only unconfirmed serial
+parameter left (see CLAUDE.md open items).
 """
 from __future__ import annotations
 
@@ -58,7 +62,7 @@ SPEED_OF_SOUND_M_S = 343.0
 ULTRASONIC_MAX_RANGE_M = 4.0
 ULTRASONIC_FIELD_OF_VIEW_RAD = 0.26  # ~15 deg, typical HC-SR04
 ULTRASONIC_MIN_RANGE_M = 0.02
-ULTRASONIC_SENSOR_NAMES = ("front_left", "front_right", "rear")
+ULTRASONIC_SENSOR_NAMES = ("left", "right")
 
 
 class WheelOdomNode(Node):
@@ -187,10 +191,10 @@ class WheelOdomNode(Node):
         self._pub.publish(msg)
 
     def _on_ultrasonic_line(self, parts: list[str]) -> None:
-        if len(parts) != 5:
+        if len(parts) != 4:
             return
         try:
-            pulse_widths_us = [int(p) for p in parts[1:4]]
+            pulse_widths_us = [int(p) for p in parts[1:3]]
         except ValueError:
             return
 

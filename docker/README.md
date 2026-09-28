@@ -46,6 +46,15 @@ source install/setup.bash
 ros2 launch bot_bringup mapping.launch.py use_sim:=true
 ```
 
+If this fails with `error: [Errno 2] No such file or directory:
+'.../install/<pkg>/share/ament_index/resource_index/packages/<pkg>'`, that's
+a known `colcon build --symlink-install` parallel-build race on the shared
+`resource_index/packages/` directory every package symlinks into -- not a
+missing file in the repo. Fix: just retry (often transient, especially
+right after adding a new package); if it persists, `colcon build
+--symlink-install --parallel-workers 1`; if still stuck, `rm -rf build
+install log` and rebuild clean.
+
 ## Run Python tests (inside the container)
 
 After building/sourcing as above:

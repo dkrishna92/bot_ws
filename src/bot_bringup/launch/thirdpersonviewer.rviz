@@ -26,8 +26,8 @@ Panels:
     Name: Navigation 2
   - Class: nav2_rviz_plugins/Selector
     Name: Selector
-  - Class: nav2_rviz_plugins/Docking
-    Name: Docking
+  - Class: slam_toolbox::SlamToolboxPlugin
+    Name: SlamToolboxPlugin
 Visualization Manager:
   Class: ""
   Displays:
@@ -691,8 +691,6 @@ Visualization Manager:
 Window Geometry:
   Displays:
     collapsed: false
-  Docking:
-    collapsed: false
   Height: 1016
   Hide Left Dock: false
   Hide Right Dock: false
@@ -704,6 +702,8 @@ Window Geometry:
   Selection:
     collapsed: false
   Selector:
+    collapsed: false
+  SlamToolboxPlugin:
     collapsed: false
   Tool Properties:
     collapsed: false

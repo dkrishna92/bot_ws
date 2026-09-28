@@ -11,13 +11,13 @@ echo "Devices"
 [[ -e /dev/rplidar ]] && ok "RPLIDAR at /dev/rplidar -> $(readlink -f /dev/rplidar)" || bad "RPLIDAR (/dev/rplidar) missing -- USB plugged in? udev rule installed?"
 [[ -e /dev/teensy ]]  && ok "Teensy at /dev/teensy -> $(readlink -f /dev/teensy)"   || bad "Teensy (/dev/teensy) missing -- no odometry/ultrasonics without it"
 lsusb -d 03e7: >/dev/null && ok "OAK-D on USB ($(lsusb -d 03e7: | cut -d' ' -f6-))" || bad "OAK-D not on USB"
-# BNO055 is on I2C3 (GPIO22/23) -- see hardware.launch.py's imu_i2c_bus
+# BNO055 is on I2C3, routed to GPIO14/15 -- see hardware.launch.py's imu_i2c_bus
 if [[ -r /dev/i2c-3 ]] && command -v i2cget >/dev/null; then
     # BNO055 CHIP_ID register 0x00 reads 0xA0
     id=$(i2cget -y 3 0x28 0x00 2>/dev/null || i2cget -y 3 0x29 0x00 2>/dev/null)
-    [[ "$id" == "0xa0" ]] && ok "BNO055 on I2C-3 (chip id 0xA0)" || bad "BNO055 not answering on I2C-3 at 0x28/0x29 (SDA pin 15, SCL pin 16)"
+    [[ "$id" == "0xa0" ]] && ok "BNO055 on I2C-3 (chip id 0xA0)" || bad "BNO055 not answering on I2C-3 at 0x28/0x29 (SDA header pin 8, SCL pin 10)"
 elif [[ ! -e /dev/i2c-3 ]]; then
-    bad "/dev/i2c-3 missing -- add dtoverlay=i2c3-pi5,pins_22_23 to /boot/firmware/config.txt and reboot"
+    bad "/dev/i2c-3 missing -- add dtoverlay=i2c3-pi5,pins_14_15 to /boot/firmware/config.txt and reboot"
 else
     bad "/dev/i2c-3 not readable (dialout group? log out/in after setup)"
 fi

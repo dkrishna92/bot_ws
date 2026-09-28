@@ -69,8 +69,8 @@ Expected devices:
 | RPLIDAR S2 | USB (CP210x) | `/dev/rplidar` |
 | Teensy (encoders + ultrasonics) | USB | `/dev/teensy` |
 | OAK-D S2 | USB 3 | `lsusb` ID `03e7:` |
-| BNO055 IMU | I2C bus 3: SDA pin 15 (GPIO22), SCL pin 16 (GPIO23), Vin 5V, GND | address `0x28` (`i2cdetect -y 3`) |
-| Pololu G2 motor driver | GPIO 12/13 (PWM), 5/16 (DIR), 6/19 (SLEEP) | `gpiochip4` |
+| BNO055 IMU | I2C bus 3: SDA header pin 8 (GPIO14), SCL pin 10 (GPIO15), Vin 5V, GND | address `0x28` (`i2cdetect -y 3`) |
+| Pololu Dual G2 motor driver (RPi HAT) | GPIO 12/13 PWM, 24/25 DIR, 22/23 SLP, 5/6 FLT (motor 1 = left / motor 2 = right) | `gpiochip4` |
 
 Troubleshooting:
 
@@ -82,13 +82,23 @@ Troubleshooting:
   nodes holding the pins / lidar port. Run `./scripts/clean_robot.sh`: it
   stops this workspace's nodes and anything holding a sensor (lidar/Teensy
   serial, IMU I2C bus, motor GPIO, OAK-D USB), drives the motor pins low,
-  then runs `clean_sim.sh` for the general ROS cleanup. Run it before every
-  launch on the robot (`clean_sim.sh` alone is for the laptop/sim).
+  then runs `clean_sim.sh` for the general ROS cleanup. It also stops the
+  web dashboard; add `--keep-dashboard` to leave it running. Run it before
+  every launch on the robot (`clean_sim.sh` alone is for the laptop/sim).
+- **Dashboard: "Address already in use"** -- a dashboard is already
+  running on that port (`ss -ltnp | grep 8080` shows it). Use that one,
+  stop it (`./scripts/clean_robot.sh`, or Ctrl-C in its terminal), or pick
+  another port with `http_port:=8081`.
 - **IMU not on bus 3** -- check `/dev/i2c-3` exists (needs
-  `dtoverlay=i2c3-pi5,pins_22_23` in `/boot/firmware/config.txt` + reboot;
+  `dtoverlay=i2c3-pi5,pins_14_15` in `/boot/firmware/config.txt` + reboot;
   `setup_pi.sh` adds it). Don't use I2C1 (header pins 3/5): on this Pi it
   times out ("controller timed out" in `/var/log/kern.log`) even with
-  nothing connected. The launch's `imu_i2c_bus` argument selects the bus.
+  nothing connected. Don't route I2C3 to GPIO22/23 either: those are the
+  motor HAT's SLP pins. The launch's `imu_i2c_bus` argument selects the bus.
+- **Motors don't respond / run in one direction only** -- run
+  `./scripts/motor_test.py` (wheels off the ground). The motor HAT's pins
+  are fixed by the board (table above); `motor_node` and the test script
+  must match them.
 - **Lidar "operation time out"** -- wrong baud or wrong driver; see
   [RPLidar](#rplidar) below.
 
@@ -109,6 +119,9 @@ docstring for teleop mode and saving):
 ```bash
 ros2 launch bot_bringup mapping.launch.py rviz:=false
 ```
+
+Or use the browser dashboard to start/stop runs and drive by keyboard --
+see [Web control dashboard](#web-control-dashboard) below.
 
 Both launches pull in `bot_bringup/launch/hardware.launch.py` (robot model
 TF, lidar, OAK-D, motor, watchdog, wheel odometry, IMU) whenever
@@ -140,6 +153,22 @@ On hardware, the lidar and OAK-D drivers are skipped (with a log line) if not in
 **To enable real sensors** on the Pi, run `scripts/setup_pi.sh` (see
 [Raspberry Pi 5 setup](#raspberry-pi-5-setup-race-robot)) -- the lidar
 driver isn't an apt package, so a plain `apt install` isn't enough.
+
+## Web control dashboard
+
+`bot_web_control` serves a browser page for starting/stopping the race or
+mapping launch, keyboard/button teleop, saving and resuming mapping
+checkpoints, and a live map view -- handy for mapping the real course
+without a terminal. On the robot:
+
+```bash
+ros2 launch bot_web_control web_control.launch.py use_sim:=false workspace_root:=$HOME/bot_ws
+# then browse to http://<pi-ip-address>:8080
+```
+
+It has no login and its Stop button is **not** an e-stop. Full controls,
+parameters, API and limitations:
+[src/bot_web_control/README.md](src/bot_web_control/README.md).
 
 ## Sensor Integration
 

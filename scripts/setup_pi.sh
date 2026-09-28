@@ -61,19 +61,33 @@ SUBSYSTEM=="usb", ATTRS{idVendor}=="03e7", MODE="0666"
 SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="rplidar", MODE="0666"
 SUBSYSTEM=="tty", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="0483", SYMLINK+="teensy", MODE="0666"
 EOF
+
+# PJRC's Teensy rules (https://www.pjrc.com/teensy/00-teensy.rules): lets a
+# normal user flash the Teensy (teensy_loader_cli talks to the bootloader
+# and the running sketch over raw USB/hidraw, root-only by default), and
+# keeps ModemManager from probing the Teensy's /dev/ttyACM port.
+cat > /etc/udev/rules.d/00-teensy.rules <<'EOF'
+ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="04[789B]?", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_MM_PORT_IGNORE}="1"
+ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="04[789A]?", ENV{MTP_NO_PROBE}="1"
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="04[789ABCD]?", MODE:="0666"
+KERNEL=="hidraw*", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="04[789B]?", MODE:="0666"
+EOF
 udevadm control --reload-rules
 udevadm trigger
 
 echo "== I2C3 for the IMU"
-# BNO055 lives on I2C3 (GPIO22/23, header pins 15/16): the default I2C1 on
-# GPIO2/3 times out on this Pi even with nothing attached. Takes effect
-# after a reboot.
+# BNO055 lives on I2C3 routed to GPIO14/15 (header pins 8 SDA / 10 SCL):
+# the default I2C1 on GPIO2/3 times out on this Pi even with nothing
+# attached, and GPIO22/23 belong to the Pololu G2 motor HAT (motor SLP).
+# Takes effect after a reboot.
 CONFIG=/boot/firmware/config.txt
-if ! grep -q "^dtoverlay=i2c3-pi5,pins_22_23" "$CONFIG"; then
+if ! grep -q "^dtoverlay=i2c3-pi5,pins_14_15" "$CONFIG"; then
     cp "$CONFIG" "$CONFIG.bak.$(date +%Y%m%d%H%M%S)"
+    # Drop the old routing onto the motor HAT's SLP pins, if present
+    sed -i '/^dtoverlay=i2c3-pi5,pins_22_23/d' "$CONFIG"
     # Append under an explicit [all] so it isn't caught by a [pi4]/[cm4] section
-    printf '\n[all]\ndtoverlay=i2c3-pi5,pins_22_23\n' >> "$CONFIG"
-    echo "  added I2C3 overlay -- REBOOT required"
+    printf '\n[all]\ndtoverlay=i2c3-pi5,pins_14_15\n' >> "$CONFIG"
+    echo "  I2C3 overlay set to GPIO14/15 -- REBOOT required"
 fi
 
 echo "== rosdep"

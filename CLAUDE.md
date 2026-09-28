@@ -44,14 +44,47 @@ Hard constraints from the rules doc:
   self-returns under 0.32 m — measure and update it.
 - Motor driver: Pololu Dual G2 High-Power Motor Driver 18v18 — PWM + DIR +
   SLEEP digital I/O, NO serial/I2C interface (this was a corrected mistake
-  early on — don't reintroduce a serial-protocol assumption for this board)
+  early on — don't reintroduce a serial-protocol assumption for this board).
+  It's the **Raspberry Pi HAT version, so its pins are fixed by the board**
+  (BCM GPIO): PWM 12/13, DIR 24/25, SLP 22/23, FLT 5/6 (driver's
+  open-drain fault output, read with a Pi pull-up; low = fault); motor 1 =
+  left, motor 2 = right. Confirmed 2026-09-27. Before that, `motor_node`
+  used a guessed map (DIR 5/16, SLEEP 6/19): it drove the FLT pins as
+  outputs, never drove the real DIR/SLP pins, and the IMU's I2C bus sat on
+  the SLP pins -- so direction never changed and the driver never slept.
+  `scripts/motor_test.py` checks each motor/direction against the
+  encoders. The motors are mounted mirror-image, so the right channel was
+  originally inverted in software (`motor_node`'s `channel_b_inverted`,
+  same in the test script) so a positive command drives both wheels
+  forward. **New motors installed 2026-09-28, both sides needed
+  re-calibrating, and the process caught a real gap in
+  `scripts/motor_test.py`'s methodology**:
+  - Left: `scripts/motor_test.py` caught it running backwards relative to
+    command (right unaffected at the time) -- its leads landed reversed
+    compared to the old motor. `channel_a_inverted` is now `true`.
+  - Right: `scripts/motor_test.py` reported "OK", but a direct visual
+    check of the wheel caught it spinning backwards relative to command
+    anyway. That script only checks *self-consistency* between commanded
+    direction and encoder count -- it can't distinguish "genuinely
+    correct" from "motor direction wrong AND encoder sign wrong,
+    cancelling out," which is exactly what had happened. Fixed with two
+    independent corrections: `channel_b_inverted` flipped back to `false`
+    (true motor direction), and the right encoder's sign inverted in
+    `teensy_ws` firmware itself (`RIGHT_ENCODER_SIGN`, not a Python-side
+    patch, so `scripts/motor_test.py`'s own direct reading of the raw `E`
+    line stays correct too). **Lesson: always visually confirm wheel
+    direction after a motor or encoder change, not just this script's
+    summary** -- re-run it (and watch the wheel) after any future
+    motor/encoder rewiring rather than assuming these polarities hold.
 - Ultrasonic: HC-SR04-class sensors, trigger/echo timing. Moved from the
   Pi's bit-banged RPi.GPIO (2026-09-20) onto the same Teensy that reads
   wheel encoders, reporting raw echo pulse widths over the same USB serial
   link as encoder ticks — see `bot_odometry`'s wheel_odom_node below,
   which now owns both. The old `bot_ultrasonic` package (Pi-side GPIO
-  node) is retired. Trigger/echo pin assignment on the Teensy is a
-  placeholder, same pending-spec status as the RPLIDAR model below.
+  node) is retired. **Design changed 2026-09-27: two sensors (left/right),
+  not three** — the earlier front-left/front-right/rear layout dropped the
+  rear sensor. Trigger/echo pins confirmed on the Teensy: left Trig=2/
+  Echo=3, right Trig=4/Echo=5 (`teensy_ws`'s `LEFT_TRIG_PIN`/etc).
 - Wheel encoders: quadrature, one per side (matches the DiffDrive plugin's
   left_joint/right_joint grouping in `bot_gazebo`), read by a Teensy via the
   `Encoder` library and reported to the Pi over USB serial as tick counts —
@@ -60,8 +93,13 @@ Hard constraints from the rules doc:
   serial link; it is NOT the e-stop MCU (that's a separate Arduino Nano,
   see Safety architecture). Encoder part number/CPR confirmed 2026-09-24:
   Pololu #4843 (20.4:1 25D 12V HP gearmotor, 48 CPR motor-shaft encoder =
-  979.62 CPR at the gearbox output shaft). Exact Teensy pin assignment
-  still TBD — same pending-spec status as the RPLIDAR model below.
+  979.62 CPR at the gearbox output shaft). Teensy pins confirmed
+  2026-09-27: mounted on the front-left/front-right wheels (labeled LF/RF)
+  but electrically the "left"/"right" side encoders wheel_odom_node
+  expects — left A=20/B=21, right A=22/B=23, meter-checked (`teensy_ws`'s
+  `LEFT_ENC_A_PIN`/etc; an earlier note here had the sides and A/B
+  swapped). Read via the analog workaround until the dividers are fixed —
+  see Open items.
 - Drive motors: Pololu #4843 (20.4:1 25D 12V HP gearmotor), one per wheel,
   paired 2-per-side onto the Pololu G2 driver's two channels (matches the
   DiffDrive plugin's per-side joint grouping above). Real spec (12V):
@@ -75,13 +113,17 @@ Hard constraints from the rules doc:
 - IMU: Bosch BNO055 — 9-DOF (accel + gyro + magnetometer) with onboard
   sensor fusion; outputs an absolute, magnetically-referenced orientation
   directly from the chip, not just raw gyro. Interface decided (2026-09-20):
-  I2C. **Moved to I2C3 on GPIO22/23 (header pins 15/16) on 2026-09-25**:
-  on the race Pi, I2C1 (GPIO2/3, pins 3/5) logs "controller timed out"
-  even with nothing attached, so don't move it back. Needs
-  `dtoverlay=i2c3-pi5,pins_22_23` in `/boot/firmware/config.txt`
-  (`setup_pi.sh` adds it); `hardware.launch.py`'s `imu_i2c_bus` arg
-  (default 3) selects the bus. Verified on hardware 2026-09-25: chip ID
-  0xA0 at 0x28, `/imu` at 50 Hz, ~9.4 m/s² on +z at rest. Real driver node now exists: `bot_imu`'s bno055_node (NDOF
+  I2C, on **I2C3 routed to GPIO14/15 (header pins 8 SDA / 10 SCL)** as of
+  2026-09-27. History: I2C1 (GPIO2/3, pins 3/5) logs "controller timed
+  out" on the race Pi even with nothing attached, so the IMU moved to
+  I2C3 on GPIO22/23 (2026-09-25) -- but GPIO22/23 turned out to be the
+  Pololu G2 motor HAT's SLP pins, so it moved again to GPIO14/15 (free:
+  the console is on tty1, no serial getty). Needs
+  `dtoverlay=i2c3-pi5,pins_14_15` in `/boot/firmware/config.txt`
+  (`setup_pi.sh` adds it and removes the old pins_22_23 line);
+  `hardware.launch.py`'s `imu_i2c_bus` arg (default 3) selects the bus.
+  Verified on I2C3 2026-09-25: chip ID 0xA0 at 0x28, `/imu` at 50 Hz,
+  ~9.4 m/s² on +z at rest (re-verify after the rewire). Real driver node now exists: `bot_imu`'s bno055_node (NDOF
   fusion mode, smbus2). Mounting location still not decided. Fused into
   `robot_localization`'s EKF for yaw/yaw-rate only (see
   `bot_bringup/config/ekf_params.yaml`) — wheel odometry keeps
@@ -134,6 +176,16 @@ everything into `bot_bringup`:
   CFR speed/obstacle course world files (see GAZEBO_WORLDS.md)
 - `bot_explore` — frontier_explore_node: drives autonomous SLAM mapping for
   `bot_bringup/launch/mapping.launch.py` (no teleop needed)
+- `bot_web_control` — web_control_node: browser dashboard (stdlib HTTP
+  server, port 8080, no auth) that starts/stops bringup/mapping as
+  `ros2 launch` subprocesses, teleops via `/cmd_vel` (0.5 s staleness
+  zeroing), saves/resumes slam_toolbox checkpoints, and renders `/map`.
+  Dev/ops convenience only — its Stop is not an e-stop. Stop runs
+  `clean_robot.sh` (or `clean_sim.sh` in sim) when `workspace_root` is
+  set, passing `--keep-dashboard` so the scripts don't kill the dashboard
+  itself. Run by hand without that flag, both scripts stop the dashboard
+  too (2026-09-27).
+  See `src/bot_web_control/README.md`.
 
 Reasoning: each node has different hardware/library dependencies (pigpio,
 RPi.GPIO, pyserial, cv_bridge/OpenCV) that don't belong on a single
@@ -182,13 +234,13 @@ Two independent layers:
    a Feather board reading a physical kill-switch input pin and reporting
    status continuously over its own paired LoRa module. See
    `arduino_ws/src/main.cpp` and `feather_ws/src/main.cpp` for the shared
-   serial protocol and each side's logic. (Correction 2026-09-25: the
-   e-stop MCU is actually an ESP32 module, not an Arduino Nano -- "Nano"
-   elsewhere in this doc means this board. The ESP32 has onboard
-   Bluetooth/WiFi; any radio link to the Pi must stay status-only and
-   never able to command the relay, or it breaks the isolation above.
-   `arduino_ws` isn't on the racebot Pi, so which PlatformIO board target
-   the firmware builds for is unverified.) (Notes: an earlier version of this doc
+   serial protocol and each side's logic. (Clarified 2026-09-27: the
+   e-stop MCU is an Arduino Nano ESP32 -- "Nano" elsewhere in this doc
+   means this board. The ESP32 has onboard Bluetooth/WiFi; any radio link
+   to the Pi must stay status-only and never able to command the relay, or
+   it breaks the isolation above. BLE was removed from `arduino_ws`
+   entirely during bring-up -- see "E-stop wireless link: real-hardware
+   bring-up and sequencing" below.) (Notes: an earlier version of this doc
    assumed this role would be a Teensy — corrected 2026-09-20. The Teensy
    is now dedicated to wheel encoder reporting instead, see Hardware above
    and `bot_odometry`. An earlier version of this doc and of
@@ -228,24 +280,33 @@ Laptop-first, Pi 5 for final integration:
   CAD, close enough to drive Nav2 tuning in sim in the meantime
 - Perception sensor spec confirmation (camera-only CV vs added depth/LiDAR
   for obstacle detection) — pending official course documentation
-- E-stop Arduino Nano firmware (`arduino_ws`) is written (fail-safe deadman
-  logic against a heartbeat received over a UART LoRa module) but untested
-  on real hardware; `RELAY_PIN`, relay active-high/low polarity, and the
-  LoRa module's actual baud rate are still placeholders
-- Remote kill-switch transmitter firmware (`feather_ws`) is written
-  (asymmetric-debounce switch read + continuous H/X status reporting over
-  its own paired LoRa module) but untested on real hardware; exact Feather
-  board variant, kill-switch pin, and LoRa module baud are still
-  placeholders. Assumes a transparent-serial LoRa module needing no
-  AT-command setup (e.g. Ebyte E32 in Normal mode) — if the actual module
-  is command-based (e.g. REYAX RYLR) instead, both this firmware and the
-  Nano's need an AT-command init sequence added
-- Wheel encoder Teensy pin assignment TBD — real hardware not yet in hand;
-  the Teensy firmware in `teensy_ws` is written against a placeholder pin
-  assignment. Part number/CPR is no longer a placeholder — confirmed
-  2026-09-24 as Pololu #4843 (979.62 CPR at the gearbox output shaft);
-  `bot_odometry`'s wheel_odom_node's `ticks_per_rev` default is updated to
-  match (was a 1200 placeholder).
+- E-stop wireless link (`arduino_ws` + `feather_ws`) is now tested and
+  confirmed working on real hardware, 2026-09-26 — see "E-stop wireless
+  link: real-hardware bring-up and sequencing" below for the full pin
+  assignments, protocol sequencing, and bring-up findings. Not yet fully
+  reliable: occasional dropped heartbeats point to a still-marginal
+  physical connection on the feather's module that needs re-seating or
+  soldering before this is race-ready.
+- Wheel encoder Teensy pin assignment confirmed 2026-09-27 against the
+  actual wiring with a meter: **left A/B = pins 20/21, right A/B = 22/23**
+  (an earlier assignment had the sides reversed). Part number/CPR
+  confirmed 2026-09-24 as Pololu #4843 (979.62 CPR at the gearbox output
+  shaft); `bot_odometry`'s wheel_odom_node's `ticks_per_rev` matches. The
+  `teensy41` build in `teensy_ws/platformio.ini` flashes and runs on the
+  robot's Teensy (flashed from the Pi with PlatformIO in `~/.platformio`;
+  needs PJRC's udev rule, which `setup_pi.sh` installs).
+- **Encoder divider workaround (2026-09-27, temporary):** the A/B voltage
+  dividers deliver only ~1.2 V (left) / ~1.37 V (right) at the Teensy
+  pins, below the Teensy 4.1's ~2.3 V digital-high threshold, so no
+  digital edge ever registers. `teensy_ws/src/main.cpp` sets
+  `ENCODER_ANALOG_WORKAROUND 1`: a 40 kHz IntervalTimer reads the pins with
+  the ADC (8-bit, 0.4/0.8 V hysteresis) and decodes quadrature in software
+  (ISR ~13 us of each 25 us; `S,<isr_us>,<left_invalid>,<right_invalid>`
+  status line once a second, ignored by wheel_odom_node). Verified by hand:
+  each side counts positive going forward, zero invalid transitions, and
+  `/odom` publishes. Only checked at hand speed; watch the invalid counts at
+  full motor speed. Once the dividers are re-sized for ~3.0–3.3 V at the
+  pin, set it back to 0 (Encoder library).
 - Nav2 params: `robot_radius` now matches `bot.urdf.xacro`'s real footprint
   and the map-then-race launch wiring (mapping.launch.py / bringup.launch.py)
   is in place; costmap inflation and controller gains are being addressed
@@ -257,14 +318,142 @@ Laptop-first, Pi 5 for final integration:
   magnetometer fusion isn't corrupted by proximity to the motors/Pololu
   driver once mounted, and verify orientation_covariance (a rough
   placeholder, see Hardware above) against real calibration
-- Ultrasonic trigger/echo pin assignment on the Teensy TBD — same
-  pending-hardware status as the encoder pins; `teensy_ws`'s firmware and
-  `bot_odometry`'s wheel_odom_node are written against placeholder pins/
-  max-range values that need updating once sensors are wired up
+- Ultrasonic trigger/echo pin assignment on the Teensy confirmed 2026-09-27
+  (see Hardware above) — was TBD, and the design also dropped from three
+  sensors to two (left/right only) in the same change. `max_range_m`/field
+  of view in `bot_odometry`'s wheel_odom_node are still unverified
+  placeholders against the actual sensor datasheet.
 - Frontier exploration still drives slowly/unreliably in sim even after the
   goal-placement bug below was fixed — see "Frontier exploration
   reliability investigation" below; current lead suspect is dev-machine
   compute contention, not a further code bug, but that isn't confirmed yet
+- AMCL's initial pose is a hardcoded constant, real-hardware-ready only in
+  appearance (2026-09-27): `nav2_params.yaml`'s `set_initial_pose: true` /
+  `initial_pose: {x: 19.0, y: 4.75, yaw: pi}` exists because the
+  vision-only autonomous start means no human is ever present to publish
+  `/initialpose` — without a seed, AMCL never starts broadcasting `map`,
+  and everything downstream hangs waiting on that transform forever. In
+  sim this is exact, since `gazebo_sim.launch.py` deterministically spawns
+  the robot at that same coordinate. On real hardware it's unconditional
+  (not gated by `use_sim`/`use_sim_time`) — AMCL would seed at that exact
+  fixed point regardless of where the robot is actually placed, an
+  implicit and currently undocumented assumption that the robot will be
+  placed at a physical spot surveyed to match it precisely. Not yet
+  decided how to actually handle this for the real course: candidates are
+  (a) physically calibrate + document a marked start position against the
+  real map's origin — lowest effort, fragile on placement precision every
+  run; (b) switch AMCL to global localization mode, trading a slightly
+  slower first-scan convergence for removing the placement-precision
+  requirement entirely; (c) have `start_trigger_node` (already
+  vision-based) estimate and publish `/initialpose` itself from a known
+  visual marker, replacing the hardcoded seed — most robust, most work.
+- A restored/stale map can silently mismatch the hardcoded AMCL initial
+  pose above (found 2026-09-27): `config/maps/map.yaml`'s saved origin
+  varies noticeably between separate mapping runs against the same course
+  and spawn point (one run's map covered `x=19.0` comfortably, another's
+  fell 0.16m short of it) — consistent with the frontier exploration
+  reliability issues above producing incomplete coverage near the map's
+  edges, not a config drift. A map that's just barely too small places
+  AMCL's seeded pose outside the map entirely, surfacing as "robot out of
+  bounds" in Nav2/RViz despite Gazebo's ground-truth spawn being correct.
+  No automated check currently catches this before it's committed or
+  raced on — worth a validation step (confirm a freshly-saved map's
+  bounds actually contain `nav2_params.yaml`'s `initial_pose` with margin)
+  before trusting any given `map.yaml` for a race run. Temporary
+  workaround applied 2026-09-27: `initial_pose.x` nudged 19.0 → 18.5 to
+  fall back inside the current map's bounds, at the cost of a small known
+  inaccuracy versus the real spawn point. Revert to 19.0 once the map is
+  regenerated to actually cover it.
+
+## E-stop wireless link: real-hardware bring-up and sequencing (2026-09-26)
+
+Both `arduino_ws` and `feather_ws` are now tested and confirmed working on
+real hardware — the 2026-09-20 entry below covers when they were first
+written, but that was compiled-only, never wired up. Real hardware
+surfaced several placeholder-vs-actual-pin mismatches, all now corrected:
+
+- **Board identification:** the kill-switch transmitter is a "YD-RP2040"
+  Feather-form-factor clone board — it identifies over USB with Adafruit's
+  own Feather RP2040 vendor/product ID (239A:80F1/80F2), a common clone
+  pattern (reusing the factory bootloader identity rather than registering
+  a new one). `feather_ws/platformio.ini` targets PlatformIO's
+  `adafruit_feather` board definition (earlephilhower RP2040 core, via
+  maxgerhardt's community platform fork, since the official PlatformIO
+  `raspberrypi` platform has no Feather RP2040 board at all).
+- **feather_ws confirmed pins:** kill switch on GPIO20; the Ebyte E32
+  module's M0/M1 mode-select on GPIO10/GPIO11 (driven LOW/LOW for Normal
+  transparent mode); module UART on `Serial2` (RP2040 UART1), GP8 TX /
+  GP9 RX, crossed to the module's RXD/TXD. This board variant's own
+  `pins_arduino.h` defines `Serial2`'s pins as the dummy value 31 ("not
+  pinned out"), unlike the generic "pico" board where Serial2 defaults to
+  GP8/GP9 automatically — an explicit `setTX(8)/setRX(9)` remap in
+  `setup()` before `.begin()` is required, and was the actual root cause
+  of an extended period where the module never responded to anything,
+  even once the wiring itself was corrected.
+- **arduino_ws confirmed pins:** module UART RX/TX on the Nano ESP32's
+  "RX0"/"TX1" silkscreen pins, `D0`/`D1` in the board variant's own macros
+  (GPIO44/GPIO43) — an earlier placeholder had guessed raw GPIO4/GPIO5, a
+  real mismatch. M0/M1 on `D3`/`D4`. Relay on `D5` (GPIO8) — an earlier
+  raw-number placeholder (`7`) had actually resolved to `D4`'s GPIO (7), a
+  different physical pin than the confirmed D5 wiring. All of these now
+  use the board variant's own symbolic `Dx` macros rather than raw GPIO
+  numbers, specifically to avoid this class of mismatch recurring.
+- **BLE removed from arduino_ws:** it was only ever used for debug/
+  identification (finding the board over a Bluetooth scan), never part of
+  the e-stop signal path, and was the prime suspect for an intermittent
+  boot hang observed during bring-up (board would enumerate under its ROM
+  USB-Serial-JTAG fallback identity with a completely silent `Serial`,
+  recoverable only by a manual double-reset of the physical button).
+  Removing it eliminated the hang.
+- **LoRa UART baud standardized:** both sides' MCU-to-module UART baud is
+  9600 (Ebyte E32's factory default) — `arduino_ws` had been left at an
+  earlier placeholder of 115200, a mismatch that would have silently
+  broken the link (garbled bytes, permanent fail-safe cutoff) had it gone
+  untested.
+- **Confirmed working over real RF, not just bench loopback:** with the
+  above fixes, the Nano reliably receives the feather's heartbeat over the
+  actual wireless link (verified via continuous `H` reception matching the
+  ~100ms transmit interval). The reverse direction (Nano→feather) was not
+  exercised the same way and is unconfirmed — not a concern for the safety
+  path itself, since only the feather→Nano direction carries the actual
+  kill-switch signal.
+- **Link is not yet rock-solid:** occasional dropped heartbeats still
+  occur (visible as the Nano's status LED briefly blinking even under
+  normal operation) — likely a still-marginal physical connection
+  (breadboard jumpers) to the feather's module specifically, not a
+  protocol or pin-configuration problem (both are independently confirmed
+  correct via a UART loopback test and the module's own real
+  command-response during bring-up). Re-seating or soldering that
+  module's connections is the next step toward full reliability;
+  `HEARTBEAT_TIMEOUT_MS` was raised from 200ms to 400ms to tolerate more
+  of this while the wiring is finalized, still comfortably under the
+  rules' 1s cutoff.
+
+**Sequencing / protocol, for reference:**
+
+1. `feather_ws` reads the kill switch every loop iteration (asymmetric
+   debounce: instant trip, 50ms debounced release) and sends one line —
+   `H\n` (OK) or `X\n` (asserted) — over its LoRa module every
+   `REPORT_INTERVAL_MS` (100ms / 10Hz), regardless of whether the state
+   changed since the last report.
+2. `arduino_ws` reads whatever bytes have arrived from its own paired
+   module every loop iteration. The most recently parsed `H` or `X` sets
+   the relay state immediately.
+3. Independent of message content, if no valid `H`/`X` has arrived within
+   `HEARTBEAT_TIMEOUT_MS` (400ms) of the last one — or none has ever
+   arrived, e.g. right after power-on — the relay is forced de-energized
+   (fail-safe), overriding whatever the last received state was.
+4. The relay only re-energizes on a clean `H` received while not
+   link-lost. There is no separate "resume" message — the transmitter
+   simply goes back to sending `H` once the switch clears.
+5. Status LEDs (for diagnosis without a USB serial monitor): `feather_ws`'s
+   LED (GPIO25 — this clone's `LED_BUILTIN`/GPIO13 is unpopulated; it
+   separately has an unused NeoPixel) blinks while sending `H` and goes
+   solid while sending `X`. `arduino_ws`'s LED is off while healthy (last
+   message was `H`), solid while an `X` is asserted, and blinks
+   specifically when the link is lost/stale — so a fail-safe triggered by
+   a timeout is visually distinguishable from a deliberate kill-switch
+   press.
 
 ## Frontier exploration reliability investigation (2026-09-20, in progress)
 

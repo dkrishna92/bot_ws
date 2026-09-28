@@ -16,7 +16,8 @@
 # motor_node logs "GPIO busy" and never drives.
 #
 # Usage (on the Pi, before every launch):
-#   scripts/clean_robot.sh
+#   scripts/clean_robot.sh                   # also stops the web dashboard
+#   scripts/clean_robot.sh --keep-dashboard  # leaves bot_web_control running
 #
 # Exit code 0: sensors free and environment clean, safe to launch.
 # Exit code 1: something survived SIGKILL or still holds a sensor (e.g.
@@ -25,20 +26,28 @@
 
 set -uo pipefail
 
+# --keep-dashboard: leave bot_web_control running. The dashboard's own Stop
+# button runs this script with it; without it, the dashboard would match
+# "ros2 launch" / install/ below and kill itself. Run by hand (no flag), the
+# dashboard is stopped too, like everything else.
+KEEP_DASHBOARD=0
+[ "${1:-}" = "--keep-dashboard" ] && KEEP_DASHBOARD=1
+
 WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # "$WORKSPACE_ROOT/install/" catches every node built from this workspace
 # (motor_node, watchdog_node, wheel_odom_node, bno055_node, sllidar_node, ...).
 PATTERN="ros2 launch|sllidar_node|rplidar_composition|component_container|$WORKSPACE_ROOT/install/"
 
-# Motor driver pins (motor_node defaults: PWM 12/13, DIR 5/16, SLEEP 6/19)
-# and the RP1 header GPIO chip -- keep in sync with bot_motor/motor_node.py.
+# Motor driver pins (Pololu Dual G2 for RPi: PWM 12/13, DIR 24/25, SLP 22/23;
+# FLT 5/6 are driver outputs and left alone) and the RP1 header GPIO chip --
+# keep in sync with bot_motor/motor_node.py.
 GPIO_CHIP=gpiochip4
-MOTOR_PINS="12 13 5 16 6 19"
+MOTOR_PINS="12 13 24 25 22 23"
 
 list_pids() {
     # grep -v grep: the pipeline's own grep would otherwise match itself.
-    ps aux | grep -E "$PATTERN" | grep -v grep | awk '{print $2}'
+    ps aux | grep -E "$PATTERN" | grep -v grep | { if [ "$KEEP_DASHBOARD" = 1 ]; then grep -v bot_web_control; else cat; fi; } | awk '{print $2}'
 }
 
 # Sensor device nodes that only one process can own at a time. Resolved to
@@ -114,7 +123,7 @@ fi
 
 echo
 echo "== General ROS 2 cleanup (clean_sim.sh) =="
-"$WORKSPACE_ROOT/scripts/clean_sim.sh"
+"$WORKSPACE_ROOT/scripts/clean_sim.sh" "$@"
 sim_status=$?
 
 holders="$(list_device_holders)"
