@@ -27,7 +27,9 @@ Hard constraints from the rules doc:
 
 - Compute: Raspberry Pi 5, Ubuntu Server 24.04 LTS (arm64), native install —
   NOT Raspberry Pi OS, NOT Docker. Confirmed officially supported starting
-  with 24.04.
+  with 24.04. The race Pi had a GNOME desktop installed; it now boots
+  headless (`multi-user.target`, set 2026-09-28, also in `setup_pi.sh`) to
+  leave CPU/RAM for the Nav2 stack.
 - Lidar: RPLIDAR S2 (identified 2026-09-25 on the Pi: answers only at
   1 Mbaud, DenseBoost mode = 32 kHz sample rate / 10 Hz / 30 m — the old
   "RP32" reference was the 32K sample rate). Driver is Slamtec's
@@ -128,7 +130,16 @@ Hard constraints from the rules doc:
   front panel (not counting the OAK), on the centreline, 94 mm above
   ground, with its X axis facing the BACK of the robot (Y right, Z up).
   `bot.urdf.xacro`'s `imu_joint` encodes this as yaw = pi; the driver does
-  no axis remapping, so that transform is the only correction. Fused into
+  no axis remapping, so that transform is the only correction. **Runs in
+  IMUPLUS mode (gyro + accel, no magnetometer) since 2026-09-29**, not
+  NDOF: the chip reported CALIB_STAT sys=0 mag=0 on the robot, its
+  magnetometer-referenced heading re-snapped as the motors disturbed it,
+  and a mapping run came out as two copies of the room rotated ~25-30 deg
+  apart. Heading is now relative to power-on (EKF `imu0_relative: true`);
+  no calibration step is needed (the gyro self-calibrates at rest;
+  `bno055_node`'s `fusion_mode` param can switch back to `ndof`). Mount
+  verified the same day: +9.59 m/s^2 on chip Z at rest (Z up), so the
+  yaw-rate sign is unaffected by the yaw = pi mount. Fused into
   `robot_localization`'s EKF for yaw/yaw-rate only (see
   `bot_bringup/config/ekf_params.yaml`) — wheel odometry keeps
   position/linear velocity. Simulated in Gazebo via `bot.urdf.xacro`'s
@@ -314,6 +325,29 @@ Laptop-first, Pi 5 for final integration:
   reliable: occasional dropped heartbeats point to a still-marginal
   physical connection on the feather's module that needs re-seating or
   soldering before this is race-ready.
+- **E-stop Nano ESP32 hangs on a full battery power-up (found
+  2026-09-29):** it comes up in ESP32 ROM download mode (USB 303a:1001,
+  "waiting for download") instead of running its firmware, so no heartbeat
+  is ever processed and the relay stays de-energized (fails safe, but the
+  motors stay dead). A USB replug or its reset button boots it fine. Read
+  over the ROM loader: `GPIO_STRAP_REG` = 0x00000000 (all strapping pins
+  latched LOW, incl. GPIO0 which has a pull-up) and `FORCE_DOWNLOAD_BOOT`
+  clear -- i.e. not a host-triggered reset but the chip leaving reset
+  before its supply had ramped up on the slow battery power-up. The BLE
+  removal (below) was likely a red herring for the earlier bring-up hang.
+  Workaround: `scripts/estop_recover.py` clears it in software via the
+  ROM loader + an RTC-watchdog reset; `check_hardware.sh` flags the state.
+  Decided 2026-09-29 to leave the Nano on the Pi's USB permanently so this
+  runs automatically: `setup_pi.sh` installs a udev rule that starts
+  `estop-recover.service` whenever 303a:1001 appears (it waits 3 s, since
+  every normal boot shows 303a:1001 for ~0.6 s), and keeps ModemManager
+  off the Nano. Trade-off vs the isolation principle above: the Pi can now
+  reset or reflash the e-stop MCU over USB. A reset only ever fails safe
+  (relay de-energized until the firmware sees a clean heartbeat), but
+  nothing on the Pi should open that port except the recovery script.
+  Hardware fix still worth doing: delay the Nano's reset release
+  (capacitor from its RST pin to GND, e.g. 1-10 uF) or feed it a
+  faster-ramping supply.
 - Wheel encoder Teensy pin assignment confirmed 2026-09-27 against the
   actual wiring with a meter: **left A/B = pins 20/21, right A/B = 22/23**
   (an earlier assignment had the sides reversed). Part number/CPR
@@ -334,6 +368,23 @@ Laptop-first, Pi 5 for final integration:
   `/odom` publishes. Only checked at hand speed; watch the invalid counts at
   full motor speed. Once the dividers are re-sized for ~3.0–3.3 V at the
   pin, set it back to 0 (Encoder library).
+- **Teensy firmware mix-up (found and fixed 2026-09-29):** from 2026-09-28
+  until 2026-09-29 the Teensy ran a build from the stale standalone
+  `~/claudebot/teensy_ws` checkout on the laptop (old pin map, digital
+  `Encoder` library on ~1.2 V signals, no `S` status lines) instead of
+  this repo's `teensy_ws` (analog workaround). Odometry in that period was
+  garbage (e.g. left +854k vs right -3.6k ticks over the same driving).
+  **Only build/flash `bot_ws/teensy_ws`, from the Pi.** Reflashed with
+  `LEFT_ENCODER_SIGN` +1 / `RIGHT_ENCODER_SIGN` -1 (mirror-mounted motors,
+  checked with motor_test.py on the new firmware). Its `S` line now also
+  carries raw ADC min-max per encoder pin. **Still open:** under load (both
+  motors driving the robot at >=35-40% duty) one side over-counted ~3-4x
+  and both G2 channels faulted together ~1.5-2 s in -- suspected motor
+  noise on the analog encoder lines and a supply dip (e-stop relay dropout
+  or wiring sag). `drive_straight.py`/`rotate.py` now print encoder
+  diagnostics and whether FLT clears on its own after a fault; re-run them
+  to narrow it down. Pivot breakaway measured at 40% duty on tile
+  (`min_turn_duty_cycle` 0.45); carpet needs far more.
 - Nav2 params: `robot_radius` now matches `bot.urdf.xacro`'s real footprint
   and the map-then-race launch wiring (mapping.launch.py / bringup.launch.py)
   is in place; costmap inflation and controller gains are being addressed
@@ -341,12 +392,10 @@ Laptop-first, Pi 5 for final integration:
   hand-tuning DWB in isolation — see "Nav2 planner/controller comparison"
   below
 - BNO055: mounted 2026-09-28 (see Hardware above), 94 mm off the ground
-  and ~9 cm behind the front axle, i.e. close to the front motors. Still
-  to verify: that NDOF magnetometer heading isn't disturbed by the motors/
-  Pololu driver when they're running, that the axis orientation in the
-  URDF matches the chip (turn left by hand: `/imu` angular_velocity.z
-  should go positive), and orientation_covariance (a rough placeholder,
-  see Hardware above) against real calibration
+  and ~9 cm behind the front axle, i.e. close to the front motors -- the
+  NDOF magnetometer heading WAS disturbed there, hence IMUPLUS mode (see
+  Hardware above). Still to verify: gyro drift over a full mapping run,
+  and orientation_covariance (a rough placeholder) against real data
 - Ultrasonic trigger/echo pin assignment on the Teensy confirmed 2026-09-27
   (see Hardware above) — was TBD, and the design also dropped from three
   sensors to two (left/right only) in the same change. `max_range_m`/field
