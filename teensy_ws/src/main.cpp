@@ -38,6 +38,21 @@
 #define RIGHT_ENC_A_PIN 22 // RF
 #define RIGHT_ENC_B_PIN 23 // RF
 
+// Count direction per side: +1 or -1 so that each wheel rolling FORWARD
+// counts UP (what wheel_odom_node assumes). Applied here, not in Python,
+// so scripts/motor_test.py's raw E-line reading agrees with odometry.
+// History: on 2026-09-28 a RIGHT_ENCODER_SIGN of -1 was added -- but to a
+// stale standalone copy of this firmware (old pin map, digital Encoder
+// library on ~1.2 V signals) that was then flashed by mistake and ran
+// until 2026-09-29, so that sign was never valid for THIS code. Re-checked
+// with scripts/motor_test.py on this firmware 2026-09-29: left counts up
+// on "left forward", right counted DOWN on "right forward" -> -1. That's
+// expected: the motors are mounted mirror-image, so a forward-rolling right
+// wheel spins its motor shaft (and encoder) the opposite way to the left.
+// (Right motor direction itself was visually confirmed 2026-09-28.)
+#define LEFT_ENCODER_SIGN 1
+#define RIGHT_ENCODER_SIGN -1
+
 // Ultrasonic trigger/echo pins -- confirmed wiring, 2026-09-27. Design
 // changed from three sensors (front-left/front-right/rear) to two
 // (left/right) -- the rear sensor was dropped, not just unwired.
@@ -86,17 +101,24 @@ const int8_t QUAD_TABLE[16] = {0, -1, +1, 0, +1, 0, 0, -1, -1, 0, 0, +1, 0, +1, 
 
 IntervalTimer encoderTimer;
 volatile uint32_t encoderIsrMaxUs = 0;
+// Lowest/highest raw 8-bit reading per pin since the last S line, indexed
+// left A, left B, right A, right B -- shows whether the signals still
+// swing across ENC_LOW/HIGH_THRESHOLD (a pin stuck mid-band never counts).
+volatile uint8_t adcMin[4] = {255, 255, 255, 255};
+volatile uint8_t adcMax[4] = {0, 0, 0, 0};
 
-static inline uint8_t hysteresisBit(uint8_t pin, uint8_t previous) {
+static inline uint8_t hysteresisBit(uint8_t pin, uint8_t idx, uint8_t previous) {
   int v = analogRead(pin);
+  if (v < adcMin[idx]) adcMin[idx] = v;
+  if (v > adcMax[idx]) adcMax[idx] = v;
   if (v > ENC_HIGH_THRESHOLD) return 1;
   if (v < ENC_LOW_THRESHOLD) return 0;
   return previous;
 }
 
-static inline void updateQuadrature(AnalogQuadrature &enc) {
-  uint8_t a = hysteresisBit(enc.pinA, (enc.state >> 1) & 1);
-  uint8_t b = hysteresisBit(enc.pinB, enc.state & 1);
+static inline void updateQuadrature(AnalogQuadrature &enc, uint8_t idx) {
+  uint8_t a = hysteresisBit(enc.pinA, idx, (enc.state >> 1) & 1);
+  uint8_t b = hysteresisBit(enc.pinB, idx + 1, enc.state & 1);
   uint8_t next = (a << 1) | b;
   if (next == enc.state) return;
   if ((next ^ enc.state) == 0b11) {
@@ -109,8 +131,8 @@ static inline void updateQuadrature(AnalogQuadrature &enc) {
 
 void encoderSampleIsr() {
   uint32_t start = micros();
-  updateQuadrature(leftEnc);
-  updateQuadrature(rightEnc);
+  updateQuadrature(leftEnc, 0);
+  updateQuadrature(rightEnc, 2);
   uint32_t took = micros() - start;
   if (took > encoderIsrMaxUs) encoderIsrMaxUs = took;
 }
@@ -126,9 +148,8 @@ void setupEncoders() {
   }
   // Start from the real channel levels, not an assumed 00, so boot doesn't
   // register a phantom count. Pins that sit mid-band read as low.
-  for (AnalogQuadrature *enc : {&leftEnc, &rightEnc}) {
-    enc->state = (hysteresisBit(enc->pinA, 0) << 1) | hysteresisBit(enc->pinB, 0);
-  }
+  leftEnc.state = (hysteresisBit(leftEnc.pinA, 0, 0) << 1) | hysteresisBit(leftEnc.pinB, 1, 0);
+  rightEnc.state = (hysteresisBit(rightEnc.pinA, 2, 0) << 1) | hysteresisBit(rightEnc.pinB, 3, 0);
   encoderTimer.begin(encoderSampleIsr, ENC_SAMPLE_PERIOD_US);
 }
 #else
@@ -169,8 +190,8 @@ void setup() {
 void loop() {
   if (sinceLastEncoderReport >= ENCODER_REPORT_INTERVAL_MS) {
     sinceLastEncoderReport = 0;
-    long leftTicks = readLeftTicks();
-    long rightTicks = readRightTicks();
+    long leftTicks = LEFT_ENCODER_SIGN * readLeftTicks();
+    long rightTicks = RIGHT_ENCODER_SIGN * readRightTicks();
     Serial.print("E,");
     Serial.print(leftTicks);
     Serial.print(",");
@@ -198,13 +219,19 @@ void loop() {
   }
 
 #if ENCODER_ANALOG_WORKAROUND
-  // Once a second: S,<isr_max_us>,<left_invalid>,<right_invalid>. Debug
-  // only -- wheel_odom_node ignores lines that aren't E/U. Nonzero invalid
-  // counts mean samples are too slow for the wheel speed (missed states).
+  // Once a second: S,<isr_max_us>,<left_invalid>,<right_invalid>, then
+  // min/max raw 8-bit ADC per pin over that second (LA,LB,RA,RB; 1 count
+  // ~13 mV). Debug only -- wheel_odom_node ignores lines that aren't E/U.
+  // Nonzero invalid counts mean samples are too slow for the wheel speed.
   static elapsedMillis sinceLastStatus;
   if (sinceLastStatus >= 1000) {
     sinceLastStatus = 0;
-    Serial.printf("S,%lu,%lu,%lu\n", encoderIsrMaxUs, leftEnc.invalid, rightEnc.invalid);
+    uint8_t mn[4], mx[4];
+    noInterrupts();
+    for (int i = 0; i < 4; i++) { mn[i] = adcMin[i]; mx[i] = adcMax[i]; adcMin[i] = 255; adcMax[i] = 0; }
+    interrupts();
+    Serial.printf("S,%lu,%lu,%lu,%u-%u,%u-%u,%u-%u,%u-%u\n", encoderIsrMaxUs, leftEnc.invalid, rightEnc.invalid,
+                  mn[0], mx[0], mn[1], mx[1], mn[2], mx[2], mn[3], mx[3]);
   }
 #endif
 }
