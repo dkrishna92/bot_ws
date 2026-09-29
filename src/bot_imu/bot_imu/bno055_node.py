@@ -107,37 +107,41 @@ class Bno055Node(Node):
         self._bus.write_byte_data(self._address, _OPR_MODE_ADDR, _NDOF_MODE)
         time.sleep(0.02)
 
-    def _read_i16(self, addr: int) -> int:
-        lsb, msb = self._bus.read_i2c_block_data(self._address, addr, 2)
-        raw = (msb << 8) | lsb
+    @staticmethod
+    def _i16_at(block: list[int], offset: int) -> int:
+        raw = (block[offset + 1] << 8) | block[offset]
         return raw - 0x10000 if raw & 0x8000 else raw
 
     def _tick(self) -> None:
         if self._bus is None:
             return
 
+        # Accel (0x08), gyro (0x14) and quaternion (0x20-0x27) registers are
+        # contiguous and span exactly 32 bytes -- one block read instead of
+        # ten 2-byte reads (10x fewer I2C transactions per tick).
+        block = self._bus.read_i2c_block_data(self._address, _ACC_DATA_X_LSB_ADDR, 32)
+        acc_off = 0
+        gyr_off = _GYR_DATA_X_LSB_ADDR - _ACC_DATA_X_LSB_ADDR
+        qua_off = _QUATERNION_DATA_W_LSB_ADDR - _ACC_DATA_X_LSB_ADDR
+
         msg = Imu()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = self._frame_id
 
-        qw = self._read_i16(_QUATERNION_DATA_W_LSB_ADDR) * _QUA_LSB_PER_UNIT
-        qx = self._read_i16(_QUATERNION_DATA_W_LSB_ADDR + 2) * _QUA_LSB_PER_UNIT
-        qy = self._read_i16(_QUATERNION_DATA_W_LSB_ADDR + 4) * _QUA_LSB_PER_UNIT
-        qz = self._read_i16(_QUATERNION_DATA_W_LSB_ADDR + 6) * _QUA_LSB_PER_UNIT
-        msg.orientation.w = qw
-        msg.orientation.x = qx
-        msg.orientation.y = qy
-        msg.orientation.z = qz
+        msg.orientation.w = self._i16_at(block, qua_off) * _QUA_LSB_PER_UNIT
+        msg.orientation.x = self._i16_at(block, qua_off + 2) * _QUA_LSB_PER_UNIT
+        msg.orientation.y = self._i16_at(block, qua_off + 4) * _QUA_LSB_PER_UNIT
+        msg.orientation.z = self._i16_at(block, qua_off + 6) * _QUA_LSB_PER_UNIT
         msg.orientation_covariance = self._orientation_covariance
 
-        msg.angular_velocity.x = self._read_i16(_GYR_DATA_X_LSB_ADDR) / _GYR_LSB_PER_RPS
-        msg.angular_velocity.y = self._read_i16(_GYR_DATA_X_LSB_ADDR + 2) / _GYR_LSB_PER_RPS
-        msg.angular_velocity.z = self._read_i16(_GYR_DATA_X_LSB_ADDR + 4) / _GYR_LSB_PER_RPS
+        msg.angular_velocity.x = self._i16_at(block, gyr_off) / _GYR_LSB_PER_RPS
+        msg.angular_velocity.y = self._i16_at(block, gyr_off + 2) / _GYR_LSB_PER_RPS
+        msg.angular_velocity.z = self._i16_at(block, gyr_off + 4) / _GYR_LSB_PER_RPS
         msg.angular_velocity_covariance = self._angular_velocity_covariance
 
-        msg.linear_acceleration.x = self._read_i16(_ACC_DATA_X_LSB_ADDR) / _ACC_LSB_PER_MS2
-        msg.linear_acceleration.y = self._read_i16(_ACC_DATA_X_LSB_ADDR + 2) / _ACC_LSB_PER_MS2
-        msg.linear_acceleration.z = self._read_i16(_ACC_DATA_X_LSB_ADDR + 4) / _ACC_LSB_PER_MS2
+        msg.linear_acceleration.x = self._i16_at(block, acc_off) / _ACC_LSB_PER_MS2
+        msg.linear_acceleration.y = self._i16_at(block, acc_off + 2) / _ACC_LSB_PER_MS2
+        msg.linear_acceleration.z = self._i16_at(block, acc_off + 4) / _ACC_LSB_PER_MS2
         msg.linear_acceleration_covariance = self._linear_acceleration_covariance
 
         self._publisher.publish(msg)

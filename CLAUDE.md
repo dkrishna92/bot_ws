@@ -284,6 +284,29 @@ Laptop-first, Pi 5 for final integration:
   CAD, close enough to drive Nav2 tuning in sim in the meantime
 - Perception sensor spec confirmation (camera-only CV vs added depth/LiDAR
   for obstacle detection) — pending official course documentation
+- Pi 5 CPU optimization (2026-09-29): the per-node Python hotspots have
+  been vectorized with NumPy, verified byte/numerically identical to the
+  loops they replaced — `bot_perception`'s sensor_fusion_node
+  (`_lidar_to_3d`/`_depth_to_3d`, previously a ~76k-iteration nested
+  per-pixel Python loop, plus the per-point `Point32` build),
+  `bot_imu`'s bno055_node (one 32-byte I2C block read per tick over the
+  contiguous accel/gyro/quaternion registers instead of ten 2-byte reads,
+  ~10x fewer I2C transactions at 50 Hz), and `bot_web_control`'s
+  web_control_node map render (`np.where`/`np.flipud` instead of two
+  per-cell loops on every `/map` GET). `start_trigger_node` now destroys
+  its image subscription on latch (the TRANSIENT_LOCAL publish still
+  reaches late subscribers) so it stops decoding camera frames for the
+  whole race. **Suggested next levers, both config not code, and both
+  needing on-Pi measurement (`gz stats`/`top`/RTF) to pick values — NOT
+  yet done:** (a) if racing on MPPI, benchmark and lower
+  `MPPIController`'s `batch_size` (default 2000, single-threaded on the Pi
+  — see the Nav2 planner/controller comparison section) until the
+  controller holds its 20 Hz rate, or keep DWB on the Pi and reserve MPPI
+  for laptop A/B tests; (b) decimate the OAK depth cloud feeding
+  depth_image_proc / the `voxel_layer`, and/or trim `obstacle_max_range`
+  (currently 3.0 in the nav2 params), to cut costmap update cost. Note:
+  sensor_fusion_node is still not started by any launch file — if it's
+  ever enabled, it's now Pi-ready, but confirm it's actually wanted first.
 - E-stop wireless link (`arduino_ws` + `feather_ws`) is now tested and
   confirmed working on real hardware, 2026-09-26 — see "E-stop wireless
   link: real-hardware bring-up and sequencing" below for the full pin

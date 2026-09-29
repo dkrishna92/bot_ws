@@ -93,8 +93,14 @@ class StartTriggerNode(Node):
             durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
         )
         self._pub = self.create_publisher(Bool, "start_signal", latched_qos)
-        self.create_subscription(Image, self.get_parameter("image_topic").value,
-                                  self._on_image, 10)
+        self._image_topic = self.get_parameter("image_topic").value
+        self._sub = None
+        self._subscribe()
+
+    def _subscribe(self) -> None:
+        if self._sub is None:
+            self._sub = self.create_subscription(Image, self._image_topic,
+                                                 self._on_image, 10)
 
     def _roi_hsv(self, frame: np.ndarray) -> np.ndarray:
         h, w = frame.shape[:2]
@@ -119,7 +125,6 @@ class StartTriggerNode(Node):
 
     def _on_image(self, msg: Image) -> None:
         if self._latched:
-            self._pub.publish(Bool(data=True))
             return
 
         frame = self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
@@ -140,7 +145,12 @@ class StartTriggerNode(Node):
                 f"Start signal red->green confirmed (green={green_frac:.2f}, "
                 f"red={red_frac:.2f}) -- triggering start."
             )
+            # Latched (TRANSIENT_LOCAL) publish reaches late subscribers, so
+            # stop decoding frames at camera rate once the race has started.
             self._pub.publish(Bool(data=True))
+            if self._sub is not None:
+                self.destroy_subscription(self._sub)
+                self._sub = None
         else:
             self._pub.publish(Bool(data=False))
 
@@ -148,6 +158,7 @@ class StartTriggerNode(Node):
         """Call before a new run (e.g. from a service or a course-reset topic)."""
         self._latched = False
         self._green_streak = 0
+        self._subscribe()
 
 
 def main(args=None):

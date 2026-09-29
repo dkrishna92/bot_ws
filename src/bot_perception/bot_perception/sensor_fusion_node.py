@@ -93,14 +93,16 @@ class SensorFusionNode(Node):
 
     def _lidar_to_3d(self, scan: LaserScan, z: float = 0.1) -> np.ndarray:
         """Convert 2D lidar scan to 3D points (assumes flat ground at z=0.1m)."""
-        points = []
-        for i, range_val in enumerate(scan.ranges):
-            if scan.range_min <= range_val <= scan.range_max:
-                angle = scan.angle_min + i * scan.angle_increment
-                x = range_val * np.cos(angle)
-                y = range_val * np.sin(angle)
-                points.append([x, y, z])
-        return np.array(points) if points else np.zeros((0, 3))
+        ranges = np.asarray(scan.ranges, dtype=np.float64)
+        if ranges.size == 0:
+            return np.zeros((0, 3))
+        valid = (ranges >= scan.range_min) & (ranges <= scan.range_max)
+        if not valid.any():
+            return np.zeros((0, 3))
+        angles = scan.angle_min + np.arange(ranges.size) * scan.angle_increment
+        r = ranges[valid]
+        a = angles[valid]
+        return np.column_stack((r * np.cos(a), r * np.sin(a), np.full(r.size, z)))
 
     def _depth_to_3d(self, depth_frame: np.ndarray) -> np.ndarray:
         """Convert depth map to 3D points using intrinsics.
@@ -116,19 +118,21 @@ class SensorFusionNode(Node):
         fx, fy = 382.0, 382.0
         cx, cy = 320.0, 240.0
 
+        # Decimate by 2 in each axis (same coverage as the old stride-2 loop).
+        depth_m = depth_frame[::2, ::2].astype(np.float64) / 1000.0
+        valid = (depth_m > 0.1) & (depth_m < 5.0)
+        if not valid.any():
+            return np.zeros((0, 3))
+
         h, w = depth_frame.shape
-        points = []
+        us = np.arange(0, w, 2)
+        vs = np.arange(0, h, 2)
+        uu, vv = np.meshgrid(us, vs)
 
-        for v in range(0, h, 2):  # Skip every other pixel for efficiency
-            for u in range(0, w, 2):
-                d = depth_frame[v, u] / 1000.0  # Convert mm to meters
-                if 0.1 < d < 5.0:  # Filter out invalid/out-of-range
-                    x = (u - cx) * d / fx
-                    y = (v - cy) * d / fy
-                    z = d
-                    points.append([x, y, z])
-
-        return np.array(points) if points else np.zeros((0, 3))
+        d = depth_m[valid]
+        x = (uu[valid] - cx) * d / fx
+        y = (vv[valid] - cy) * d / fy
+        return np.column_stack((x, y, d))
 
     def _transform_points(self, points: np.ndarray, from_frame: str, to_frame: str) -> np.ndarray:
         """Transform a (N,3) point array between TF frames via a single lookup."""
@@ -178,10 +182,8 @@ class SensorFusionNode(Node):
         msg.header.frame_id = self._lidar_frame
 
         # Point32, not Point -- PointCloud.points requires geometry_msgs/Point32
-        msg.points = [
-            Point32(x=float(pt[0]), y=float(pt[1]), z=float(pt[2]))
-            for pt in all_points
-        ]
+        pts = all_points.astype(np.float32)
+        msg.points = [Point32(x=x, y=y, z=z) for x, y, z in pts.tolist()]
 
         self._pub_pointcloud.publish(msg)
 

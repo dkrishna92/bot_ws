@@ -81,6 +81,7 @@ import time
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import numpy as np
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
@@ -332,18 +333,13 @@ class WebControlNode(Node):
         w, h = grid.info.width, grid.info.height
         if w == 0 or h == 0:
             return None
-        data = grid.data
-        pixels = bytearray(w * h)
-        for i, v in enumerate(data):
-            # nav_msgs/OccupancyGrid convention: -1 unknown, 0 free, 100 occupied.
-            pixels[i] = 205 if v < 0 else int(254 - (v / 100.0) * 254)
+        # nav_msgs/OccupancyGrid convention: -1 unknown, 0 free, 100 occupied.
+        arr = np.asarray(grid.data, dtype=np.int16).reshape(h, w)
+        pixels = np.where(arr < 0, 205, (254.0 - (arr / 100.0) * 254.0).astype(np.int16))
         # OccupancyGrid row 0 is the min-y row; flip so row 0 renders at the
         # top, matching normal image/map_server PGM display convention.
-        flipped = bytearray(w * h)
-        for row in range(h):
-            dst = h - 1 - row
-            flipped[dst * w:(dst + 1) * w] = pixels[row * w:(row + 1) * w]
-        return encode_grayscale_png(w, h, bytes(flipped))
+        flipped = np.flipud(pixels).astype(np.uint8)
+        return encode_grayscale_png(w, h, flipped.tobytes())
 
     def _call_and_wait(self, client, request, service_label: str):
         if not client.wait_for_service(timeout_sec=2.0):

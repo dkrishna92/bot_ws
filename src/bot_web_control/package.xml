@@ -3,7 +3,7 @@
 <package format="3">
   <name>bot_web_control</name>
   <version>0.1.0</version>
-  <description>Localhost web dashboard: start/stop the race or mapping launch, view the live /map, and teleop (WASD, gazebo-style) with adjustable linear/angular speed. Dev/ops convenience tool, not part of the robot's own runtime behavior -- uses only Python stdlib (http.server, zlib for PNG encoding) so it adds no new dependencies.</description>
+  <description>Localhost web dashboard: start/stop the race or mapping launch, view the live /map, and teleop (WASD, gazebo-style) with adjustable linear/angular speed. Dev/ops convenience tool, not part of the robot's own runtime behavior -- PNG encoding is hand-rolled on Python stdlib (http.server, zlib); numpy is used only to vectorize the map render.</description>
   <maintainer email="krishna.dontaraju@gmail.com">Krishna</maintainer>
   <license>Apache-2.0</license>
 
@@ -11,6 +11,7 @@
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
   <!-- For the SaveMap service type (checkpoint save/resume) -->
   <exec_depend>slam_toolbox</exec_depend>
   <exec_depend>launch</exec_depend>
