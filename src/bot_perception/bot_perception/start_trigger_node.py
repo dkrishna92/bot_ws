@@ -33,7 +33,7 @@ from cv_bridge import CvBridge
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile
+from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from std_msgs.msg import Bool
 
@@ -99,8 +99,11 @@ class StartTriggerNode(Node):
 
     def _subscribe(self) -> None:
         if self._sub is None:
+            # sensor_data QoS (BEST_EFFORT): camera image streams are
+            # published best-effort, so a default RELIABLE sub would get no
+            # frames and the start would never trigger.
             self._sub = self.create_subscription(Image, self._image_topic,
-                                                 self._on_image, 10)
+                                                 self._on_image, qos_profile_sensor_data)
 
     def _roi_hsv(self, frame: np.ndarray) -> np.ndarray:
         h, w = frame.shape[:2]

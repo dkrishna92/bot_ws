@@ -22,6 +22,7 @@ import numpy as np
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile
 from rclpy.time import Time
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import OccupancyGrid
@@ -102,8 +103,15 @@ class FrontierExploreNode(Node):
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
 
+        # Match map_server/slam_toolbox's latched /map publisher so a
+        # late-joining subscriber still receives the current map.
+        map_qos = QoSProfile(
+            depth=1,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+        )
         self.create_subscription(OccupancyGrid, self.get_parameter("map_topic").value,
-                                  self._on_map, 1)
+                                  self._on_map, map_qos)
 
         # BasicNavigator's goToPose()/isTaskComplete() are blocking calls
         # that internally do their own rclpy.spin_until_future_complete(self, ...)

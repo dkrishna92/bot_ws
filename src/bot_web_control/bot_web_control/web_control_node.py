@@ -85,6 +85,7 @@ import numpy as np
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import OccupancyGrid
 from std_msgs.msg import String
@@ -173,7 +174,15 @@ class WebControlNode(Node):
         self._cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)
         self._save_map_client = self.create_client(SaveMap, "/slam_toolbox/save_map")
         self._serialize_client = self.create_client(SerializePoseGraph, "/slam_toolbox/serialize_map")
-        self.create_subscription(OccupancyGrid, "map", self._on_map, 1)
+        # Match map_server/slam_toolbox's latched /map publisher so the
+        # dashboard still gets the current map when it connects after the
+        # (race-time) map_server has already published its single latched map.
+        map_qos = QoSProfile(
+            depth=1,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.create_subscription(OccupancyGrid, "map", self._on_map, map_qos)
         self.create_timer(0.1, self._teleop_watchdog_tick)
 
         node = self

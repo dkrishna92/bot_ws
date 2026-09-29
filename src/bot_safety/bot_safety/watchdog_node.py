@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import Bool
 from sensor_msgs.msg import LaserScan
 
@@ -51,7 +52,10 @@ class WatchdogNode(Node):
 
         self._pub = self.create_publisher(Bool, "system_fault", 10)
         self._last_scan_time = None
-        self.create_subscription(LaserScan, "scan", self._on_scan, 10)
+        # sensor_data QoS (BEST_EFFORT): the RPLIDAR driver publishes /scan
+        # best-effort, so a default RELIABLE sub would receive nothing and
+        # this watchdog would fault permanently on real hardware.
+        self.create_subscription(LaserScan, "scan", self._on_scan, qos_profile_sensor_data)
 
         self._h = None
         if lgpio is not None and not self.get_parameter("dry_run").value:

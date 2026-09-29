@@ -20,6 +20,7 @@ from collections import deque
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import LaserScan, Image, PointCloud
 from geometry_msgs.msg import Point32
@@ -58,13 +59,18 @@ class SensorFusionNode(Node):
             PointCloud, "perception/obstacles", 10
         )
 
-        self.create_subscription(LaserScan, "scan", self._on_scan, 10)
-        self.create_subscription(Image, "/oak/rgb/image_raw", self._on_rgb, 10)
+        # sensor_data QoS (BEST_EFFORT): lidar and camera streams are
+        # published best-effort; a default RELIABLE sub would get nothing.
+        self.create_subscription(
+            LaserScan, "scan", self._on_scan, qos_profile_sensor_data)
+        self.create_subscription(
+            Image, "/oak/rgb/image_raw", self._on_rgb, qos_profile_sensor_data)
         # /oak/stereo/image_raw is depthai_ros_driver's actual depth image
         # topic -- it's the same topic bringup.launch.py feeds into
         # depth_image_proc (remapped there as image_rect). An earlier
         # /oak/stereo/depth here matched no real publisher.
-        self.create_subscription(Image, "/oak/stereo/image_raw", self._on_depth, 10)
+        self.create_subscription(
+            Image, "/oak/stereo/image_raw", self._on_depth, qos_profile_sensor_data)
 
         self.create_timer(0.1, self._fuse_and_publish)
 
