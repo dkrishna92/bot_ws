@@ -50,9 +50,11 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     i2c-tools
 
 echo "== device permissions"
-# On this Ubuntu raspi image, /dev/gpiochip*, /dev/i2c-* and /dev/ttyUSB*/
-# ttyACM* are all group dialout.
-usermod -aG dialout,plugdev "$SUDO_USER"
+# On this Ubuntu raspi image, /dev/gpiochip4 and /dev/ttyUSB*/ttyACM* are
+# group dialout. /dev/i2c-* start out dialout too, but i2c-tools (installed
+# above) ships a udev rule that moves them to group i2c -- without that
+# group bno055_node gets "Permission denied" on /dev/i2c-3.
+usermod -aG dialout,plugdev,i2c "$SUDO_USER"
 
 cat > /etc/udev/rules.d/80-racebot.rules <<'EOF'
 # OAK-D S2 (Movidius MyriadX; re-enumerates with a different PID after boot)
@@ -60,7 +62,27 @@ SUBSYSTEM=="usb", ATTRS{idVendor}=="03e7", MODE="0666"
 # Stable names so the lidar and Teensy can't swap ttyUSB/ttyACM numbers
 SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="rplidar", MODE="0666"
 SUBSYSTEM=="tty", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="0483", SYMLINK+="teensy", MODE="0666"
+# E-stop Nano ESP32, left on the Pi's USB: running firmware (2341:0070)
+# and its ROM loader (303a:1001). ModemManager must never probe it -- a
+# DTR/RTS toggle like esptool's can reboot it into download mode.
+ATTRS{idVendor}=="2341", ATTRS{idProduct}=="0070", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_MM_PORT_IGNORE}="1"
+ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_MM_PORT_IGNORE}="1"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2341", ATTRS{idProduct}=="0070", SYMLINK+="estop"
+# It can power up stuck in ROM download mode (see scripts/estop_recover.py);
+# whenever the loader appears, estop-recover.service waits 3 s and kicks
+# it into its firmware if it's still there.
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="303a", ATTR{idProduct}=="1001", TAG+="systemd", ENV{SYSTEMD_WANTS}+="estop-recover.service"
 EOF
+
+cat > /etc/systemd/system/estop-recover.service <<EOF
+[Unit]
+Description=Boot the e-stop Nano ESP32 out of ROM download mode if it powered up stuck there
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 $WS/scripts/estop_recover.py --wait 3
+EOF
+systemctl daemon-reload
 
 # PJRC's Teensy rules (https://www.pjrc.com/teensy/00-teensy.rules): lets a
 # normal user flash the Teensy (teensy_loader_cli talks to the bootloader
@@ -88,6 +110,15 @@ if ! grep -q "^dtoverlay=i2c3-pi5,pins_14_15" "$CONFIG"; then
     # Append under an explicit [all] so it isn't caught by a [pi4]/[cm4] section
     printf '\n[all]\ndtoverlay=i2c3-pi5,pins_14_15\n' >> "$CONFIG"
     echo "  I2C3 overlay set to GPIO14/15 -- REBOOT required"
+fi
+
+echo "== headless boot"
+# No desktop on the race Pi: GNOME costs ~300 MB and background CPU the
+# Nav2 stack needs. SSH and the web dashboard don't depend on it. Undo
+# with 'systemctl set-default graphical.target'.
+if [ "$(systemctl get-default)" != "multi-user.target" ]; then
+    systemctl set-default multi-user.target
+    echo "  default boot target set to multi-user (console only)"
 fi
 
 echo "== rosdep"

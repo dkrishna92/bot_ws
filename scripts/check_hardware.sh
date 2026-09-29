@@ -6,6 +6,7 @@ WS="$(cd "$(dirname "$0")/.." && pwd)"
 fail=0
 ok()   { printf '  \e[32mOK\e[0m   %s\n' "$1"; }
 bad()  { printf '  \e[31mFAIL\e[0m %s\n' "$1"; fail=1; }
+warn() { printf '  \e[33mWARN\e[0m %s\n' "$1"; }
 
 echo "Devices"
 [[ -e /dev/rplidar ]] && ok "RPLIDAR at /dev/rplidar -> $(readlink -f /dev/rplidar)" || bad "RPLIDAR (/dev/rplidar) missing -- USB plugged in? udev rule installed?"
@@ -19,7 +20,28 @@ if [[ -r /dev/i2c-3 ]] && command -v i2cget >/dev/null; then
 elif [[ ! -e /dev/i2c-3 ]]; then
     bad "/dev/i2c-3 missing -- add dtoverlay=i2c3-pi5,pins_14_15 to /boot/firmware/config.txt and reboot"
 else
-    bad "/dev/i2c-3 not readable (dialout group? log out/in after setup)"
+    bad "/dev/i2c-3 not readable (i2c group? sudo usermod -aG i2c \$USER, then log out/in)"
+fi
+# E-stop Arduino Nano ESP32. Only on USB for bench debugging/flashing --
+# the e-stop runs standalone off the LoRa link, so absent is a WARN, not a
+# FAIL. Its firmware prints nothing over USB, so this only proves it's
+# powered and enumerated; its status LED shows the heartbeat state (off =
+# healthy, solid = X received, blinking = link lost).
+estop_tty() {
+    local l
+    for l in /dev/serial/by-id/*; do
+        [[ -e "$l" ]] || continue
+        [[ "$(udevadm info -q property -n "$l" 2>/dev/null | grep '^ID_VENDOR_ID=')" == ID_VENDOR_ID=$1 ]] \
+            && { readlink -f "$l"; return; }
+    done
+}
+if lsusb -d 2341:0070 >/dev/null; then
+    tty=$(estop_tty 2341)
+    ok "E-stop Nano ESP32 on USB${tty:+ at $tty} (heartbeat state: check its LED -- off = healthy, blinking = link lost)"
+elif lsusb -d 303a:1001 >/dev/null; then
+    bad "E-stop Nano ESP32 stuck in ROM download mode (303a:1001) -- firmware not running; run scripts/estop_recover.py (or press its reset button)"
+else
+    warn "E-stop Nano ESP32 not on USB (normal on race day -- it runs standalone off LoRa)"
 fi
 [[ -r /dev/gpiochip4 && -w /dev/gpiochip4 ]] && ok "gpiochip4 (RP1 header GPIO) accessible" || bad "gpiochip4 not accessible (dialout group?)"
 python3 -c "import lgpio, smbus2, serial" 2>/dev/null && ok "python lgpio/smbus2/pyserial importable" || bad "python deps missing -- rerun setup_pi.sh"
