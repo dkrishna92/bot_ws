@@ -403,3 +403,50 @@ def test_save_final_map_reports_failure_when_service_unavailable():
 
     assert ok is False
     assert "not available" in msg
+
+
+def _make_maps(tmp_path, maps):
+    """maps: {name: image filename or None (image missing)}"""
+    d = tmp_path / "src" / "bot_bringup" / "config" / "maps"
+    d.mkdir(parents=True)
+    for name, image in maps.items():
+        (d / f"{name}.yaml").write_text(f"image: {image or name + '.pgm'}\nresolution: 0.05\n")
+        if image is not None:
+            (d / image).write_bytes(b"P5\n1 1\n255\n\x00")
+    return d
+
+
+def test_list_maps_only_lists_yamls_whose_image_exists_map_first(tmp_path):
+    node = _make_node()
+    node._workspace_root = str(tmp_path)
+    _make_maps(tmp_path, {"Test": "Test.pgm", "map": "map.pgm", "broken": None, "alpha": "alpha.pgm"})
+    assert node.list_maps() == ["map", "alpha", "Test"]
+
+
+def test_start_launch_bringup_passes_full_path_of_chosen_map(tmp_path, monkeypatch):
+    node = _make_node()
+    node._workspace_root = str(tmp_path)
+    d = _make_maps(tmp_path, {"map": "map.pgm", "Test": "Test.pgm"})
+    captured = {}
+    monkeypatch.setattr(
+        "bot_web_control.web_control_node.subprocess.Popen",
+        lambda cmd, **kw: _FakePopen(captured.setdefault("cmd", cmd), **kw),
+    )
+
+    ok, _ = node.start_launch("bringup", map_name="Test")
+
+    assert ok is True
+    assert f"map:={d / 'Test.yaml'}" in captured["cmd"]
+
+
+def test_start_launch_bringup_rejects_unknown_map(tmp_path, monkeypatch):
+    node = _make_node()
+    node._workspace_root = str(tmp_path)
+    _make_maps(tmp_path, {"map": "map.pgm"})
+    monkeypatch.setattr("bot_web_control.web_control_node.subprocess.Popen",
+                        lambda cmd, **kw: pytest.fail("must not launch"))
+
+    ok, msg = node.start_launch("bringup", map_name="../../etc/passwd")
+
+    assert ok is False
+    assert "no saved map" in msg

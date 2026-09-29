@@ -504,8 +504,11 @@ surfaced several placeholder-vs-actual-pin mismatches, all now corrected:
   command-response during bring-up). Re-seating or soldering that
   module's connections is the next step toward full reliability;
   `HEARTBEAT_TIMEOUT_MS` was raised from 200ms to 400ms to tolerate more
-  of this while the wiring is finalized, still comfortably under the
-  rules' 1s cutoff.
+  of this while the wiring is finalized, then to 700ms on 2026-09-29
+  after the relay kept clicking at course range (still under the rules'
+  1s cutoff). That masks a weak link: fix antenna placement/height, module
+  power and air rate. `scripts/estop_link_log.py` logs relay dropouts from
+  the Pi (via the G2's FLT pins) for walk-out range tests.
 
 **Sequencing / protocol, for reference:**
 
@@ -518,7 +521,7 @@ surfaced several placeholder-vs-actual-pin mismatches, all now corrected:
    module every loop iteration. The most recently parsed `H` or `X` sets
    the relay state immediately.
 3. Independent of message content, if no valid `H`/`X` has arrived within
-   `HEARTBEAT_TIMEOUT_MS` (400ms) of the last one — or none has ever
+   `HEARTBEAT_TIMEOUT_MS` (700ms) of the last one — or none has ever
    arrived, e.g. right after power-on — the relay is forced de-energized
    (fail-safe), overriding whatever the last received state was.
 4. The relay only re-energizes on a clean `H` received while not

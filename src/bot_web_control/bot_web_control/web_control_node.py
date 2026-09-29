@@ -2,7 +2,8 @@
 
 Runs a small HTTP server (stdlib http.server -- no new pip/apt dependency)
 alongside an rclpy node, serving a single-page dashboard with:
-  - Start: launches bringup.launch.py (race run) as a `ros2 launch` subprocess.
+  - Start: launches bringup.launch.py (race run) as a `ros2 launch` subprocess,
+    racing on the saved map picked in the dashboard's map list (map:=).
   - Stop: terminates whichever launch (bringup or mapping) is currently
     tracked, then (if workspace_root is set) best-effort runs
     scripts/clean_sim.sh -- or scripts/clean_robot.sh when use_sim is false
@@ -224,6 +225,8 @@ class WebControlNode(Node):
                     self.send_header("Cache-Control", "no-store")
                     self.end_headers()
                     self.wfile.write(png)
+                elif self.path.startswith("/api/maps"):
+                    self._send_json({"maps": node.list_maps()})
                 elif self.path.startswith("/api/status"):
                     self._send_json(node.status())
                 else:
@@ -243,7 +246,8 @@ class WebControlNode(Node):
                     )
                     self._send_json({"ok": True})
                 elif self.path == "/api/launch/bringup":
-                    ok, msg = node.start_launch("bringup")
+                    body = self._read_json()
+                    ok, msg = node.start_launch("bringup", map_name=body.get("map"))
                     self._send_json({"ok": ok, "message": msg})
                 elif self.path == "/api/launch/mapping":
                     body = self._read_json()
@@ -387,6 +391,32 @@ class WebControlNode(Node):
             return None, f"invalid map name {name!r} -- use a bare filename, no slashes"
         return f"{MAPS_DIR}/{name}", None
 
+    def _maps_dir(self) -> str:
+        return os.path.join(self._workspace_root, MAPS_DIR) if self._workspace_root else MAPS_DIR
+
+    def list_maps(self) -> list[str]:
+        """Names of the saved race maps: every <name>.yaml in the maps
+        directory whose 'image:' file actually exists next to it. 'map'
+        (bringup.launch.py's default) first, then alphabetical."""
+        maps_dir = self._maps_dir()
+        try:
+            files = os.listdir(maps_dir)
+        except OSError:
+            return []
+        names = []
+        for f in files:
+            if not f.endswith(".yaml"):
+                continue
+            try:
+                with open(os.path.join(maps_dir, f)) as fh:
+                    image = next((line.split(":", 1)[1].strip() for line in fh
+                                  if line.startswith("image:")), "")
+            except OSError:
+                continue
+            if image and os.path.isfile(os.path.join(maps_dir, image)):
+                names.append(f[:-len(".yaml")])
+        return sorted(names, key=lambda n: (n != "map", n.lower()))
+
     def save_checkpoint(self, name: str | None):
         """Checkpoint the in-progress map via slam_toolbox's serialize_map
         service -- does not stop mapping. Unlike save_map (a flattened
@@ -414,11 +444,8 @@ class WebControlNode(Node):
         actually load for racing. Not resumable by a later mapping run --
         use save_checkpoint for that instead. name is an optional bare
         filename (e.g. "obstacle_v2") to save alongside the default map
-        instead of overwriting it -- see _resolve_map_name. Note:
-        bringup.launch.py always races against config/maps/map.yaml
-        specifically, so a non-default name here needs renaming/copying
-        into place (or nav2_params.yaml's map arg changed) before a race
-        run will actually use it.
+        instead of overwriting it -- see _resolve_map_name. Any saved map
+        can then be picked for bringup (start_launch's map_name).
         """
         path, err = self._resolve_map_name(name, self._map_save_path)
         if err:
@@ -431,13 +458,20 @@ class WebControlNode(Node):
         return True, f"saved final map as '{path}' (ready for bringup.launch.py)"
 
     def start_launch(self, target: str, resume: bool = False, resume_pose: str | None = None,
-                     autonomous: bool = False):
+                     autonomous: bool = False, map_name: str | None = None):
         with self._lock:
             if self._proc is not None and self._proc.poll() is None:
                 return False, f"'{self._proc_label}' is already running -- stop it first"
         launch_file = "bringup.launch.py" if target == "bringup" else "mapping.launch.py"
         cmd = ["ros2", "launch", "bot_bringup", launch_file,
                f"use_sim:={'true' if self._use_sim else 'false'}", f"world:={self._world}"]
+        if target == "bringup" and map_name:
+            # Only maps actually listed (no arbitrary paths from the browser).
+            # Passed as a full path: maps saved since the last colcon build
+            # aren't in the installed share dir that a bare name resolves to.
+            if map_name not in self.list_maps():
+                return False, f"no saved map named {map_name!r}"
+            cmd.append(f"map:={os.path.abspath(os.path.join(self._maps_dir(), map_name + '.yaml'))}")
         if target == "mapping":
             # Default: this tool's own teleop feature is what you'd drive it
             # with (mapping.launch.py skips Nav2 and frontier_explore_node).

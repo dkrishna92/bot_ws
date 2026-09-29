@@ -45,7 +45,8 @@ across many runs.
 
 | Control | What it does |
 | --- | --- |
-| **Start (bringup)** | Runs `ros2 launch bot_bringup bringup.launch.py` (the race launch) with this dashboard's `use_sim` and `world`. |
+| **Start (bringup)** | Runs `ros2 launch bot_bringup bringup.launch.py` (the race launch) with this dashboard's `use_sim` and `world`, racing on the map picked in **on map**. |
+| **on map** | The saved maps in `src/bot_bringup/config/maps`: every `<name>.yaml` whose image file exists (`map` first). Passed to bringup as `map:=<full path>`, so a map saved a minute ago works without a rebuild. The list refreshes when you open it and after **Save Final Map**. |
 | **Mapping Run (teleop)** | Runs `mapping.launch.py teleop:=true`: SLAM builds a map while you drive with the teleop controls. With **Resume from checkpoint** ticked, it continues from the saved checkpoint map at the pose in the x / y / yaw fields instead of starting empty. |
 | **Start Autonomous Mapping Run** | Runs `mapping.launch.py` without `teleop:=true`: Nav2 and `bot_explore`'s frontier explorer drive the robot into unexplored space on their own while SLAM builds the map (always a fresh map). Asks for confirmation first. Heavier than teleop mapping, since it runs the full Nav2 stack. |
 | **Stop** | Sends Ctrl-C (SIGINT) to the running launch, force-kills it after 5 s, publishes a zero `/cmd_vel`, and, if `workspace_root` is set, runs `clean_robot.sh` (robot) or `clean_sim.sh` (sim) to catch leftover processes. It passes `--keep-dashboard`, so the dashboard itself keeps running. |
@@ -111,7 +112,8 @@ The page is a thin client over these endpoints; `curl` works too, e.g.
 | GET | `/api/status` | JSON: `running` (`"bringup"`, `"mapping"` or `null`), `map_available`, `linear_speed`, `angular_speed`. |
 | GET | `/api/map.png` | Latest `/map` as a PNG; 503 if no map has arrived yet. |
 | POST | `/api/cmd_vel` | `{"linear": m/s, "angular": rad/s}`, published as `/cmd_vel` (resets the 0.5 s staleness timer). |
-| POST | `/api/launch/bringup` | Start the race launch. |
+| GET | `/api/maps` | JSON: `maps`, the saved race map names. |
+| POST | `/api/launch/bringup` | Start the race launch; optional body `{"map": "<name>"}` (one of `/api/maps`). |
 | POST | `/api/launch/mapping` | Start a mapping run; body `{"resume": true, "pose": "x,y,yaw"}` to resume, or `{"autonomous": true}` for frontier exploration instead of teleop. |
 | POST | `/api/save_map` | Save the checkpoint; optional body `{"name": "<path>"}`. |
 | POST | `/api/stop` | Stop the running launch (see Stop above). |

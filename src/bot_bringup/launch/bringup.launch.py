@@ -22,7 +22,7 @@ import os
 import yaml
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction, SetEnvironmentVariable, Shutdown
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction, SetEnvironmentVariable, SetLaunchConfiguration, Shutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, NotEqualsSubstitution
 from launch.conditions import IfCondition, UnlessCondition
@@ -33,6 +33,11 @@ def _rviz_available():
     # Launching a Node whose package isn't installed crashes the whole launch
     # *after* earlier nodes have started, orphaning them (still holding the
     # lidar port and motor GPIO). The Pi doesn't ship RViz, so check up front.
+    # Also skip it with no display: the race Pi boots headless now, and
+    # rviz2 aborts (exit -6) without one -- which took the whole launch down
+    # with it mid-startup (2026-09-29).
+    if not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
+        return False
     try:
         get_package_share_directory('rviz2')
         return True
@@ -66,6 +71,17 @@ def _read_pgm_size(path):
     return width, height
 
 
+def _resolve_map(context):
+    """The 'map' launch argument: a saved map's name in config/maps (e.g.
+    'map', 'Test') or a path to a .yaml. Names resolve in the installed
+    share dir; maps saved after the last colcon build aren't installed yet,
+    so pass their full path instead (the web dashboard does)."""
+    value = LaunchConfiguration('map').perform(context).strip()
+    if value.endswith('.yaml') or os.sep in value:
+        return os.path.abspath(os.path.expanduser(value))
+    return os.path.join(get_package_share_directory('bot_bringup'), 'config', 'maps', f'{value}.yaml')
+
+
 def _validate_map(context, *args, **kwargs):
     """Fail fast, with a clear message, instead of letting a bad map surface
     as a cryptic Nav2 failure many steps downstream (amcl silently never
@@ -86,7 +102,9 @@ def _validate_map(context, *args, **kwargs):
     covariance and the robot's footprint are accounted for.
     """
     pkg_bringup = get_package_share_directory('bot_bringup')
-    map_yaml_path = os.path.join(pkg_bringup, 'config', 'maps', 'map.yaml')
+    map_yaml_path = _resolve_map(context)
+    # Hand the resolved path to the nav2_bringup include that follows
+    set_map = SetLaunchConfiguration('map_yaml', map_yaml_path)
     nav2_params_path = os.path.join(
         pkg_bringup, 'config', LaunchConfiguration('nav2_params_file').perform(context)
     )
@@ -150,7 +168,7 @@ def _validate_map(context, *args, **kwargs):
                 "if this margin is being overly strict for a known-good map."
             )), Shutdown(reason='initial_pose outside map bounds')]
 
-    return [LogInfo(msg=(
+    return [set_map, LogInfo(msg=(
         f"Map bounds check OK: {map_yaml_path} covers amcl's initial_pose "
         f"with >= {margin}m margin (or set_initial_pose is false)."
     ))]
@@ -180,6 +198,12 @@ def generate_launch_description():
             'use_sim',
             default_value='false',
             description='Launch with Gazebo simulation',
+        ),
+        DeclareLaunchArgument(
+            'map',
+            default_value='map',
+            description="Map to race on: a saved map's name in config/maps "
+                        "(e.g. 'map', 'Test') or a path to its .yaml",
         ),
         DeclareLaunchArgument(
             'rviz',
@@ -361,7 +385,7 @@ def generate_launch_description():
                     # must be a real Python bool literal (capitalized), not
                     # the lowercase 'true'/'false' used elsewhere here.
                     'slam': 'False',
-                    'map': PathJoinSubstitution([pkg_bringup, 'config', 'maps', 'map.yaml']),
+                    'map': LaunchConfiguration('map_yaml'),  # resolved by _validate_map
                     'use_sim_time': LaunchConfiguration('use_sim'),
                     'params_file': PathJoinSubstitution([pkg_bringup, 'config', LaunchConfiguration('nav2_params_file')]),
                     'autostart': 'true',
@@ -373,7 +397,7 @@ def generate_launch_description():
         # panel for sending 2D Nav Goals, a ThirdPersonFollower camera that
         # actually tracks base_link, and the OAK-D depth point cloud) rather
         # than nav2_bringup's stock nav2_default_view.rviz.
-        rviz_action = LogInfo(msg='rviz2 not installed -- skipping RViz')
+        rviz_action = LogInfo(msg='rviz2 not installed or no display -- skipping RViz')
         if _rviz_available():
             rviz_action = Node(
                 package='rviz2',

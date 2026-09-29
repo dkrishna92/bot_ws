@@ -68,6 +68,8 @@ SUBSYSTEM=="tty", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="0483", SYMLINK+="t
 ATTRS{idVendor}=="2341", ATTRS{idProduct}=="0070", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_MM_PORT_IGNORE}="1"
 ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_MM_PORT_IGNORE}="1"
 SUBSYSTEM=="tty", ATTRS{idVendor}=="2341", ATTRS{idProduct}=="0070", SYMLINK+="estop"
+# Let the normal user flash it over DFU (dfu-util needs raw USB access)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2341", ATTRS{idProduct}=="0070", MODE="0666"
 # It can power up stuck in ROM download mode (see scripts/estop_recover.py);
 # whenever the loader appears, estop-recover.service waits 3 s and kicks
 # it into its firmware if it's still there.

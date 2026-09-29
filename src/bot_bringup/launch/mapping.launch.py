@@ -64,6 +64,8 @@ Usage:
     # bringup.launch.py can localize against it on race day:
     colcon build --packages-select bot_bringup
 """
+import os
+
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction
@@ -77,6 +79,11 @@ def _rviz_available():
     # Launching a Node whose package isn't installed crashes the whole launch
     # *after* earlier nodes have started, orphaning them (still holding the
     # lidar port and motor GPIO). The Pi doesn't ship RViz, so check up front.
+    # Also skip it with no display: the race Pi boots headless now, and
+    # rviz2 aborts (exit -6) without one -- which took the whole launch down
+    # with it mid-startup (2026-09-29).
+    if not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
+        return False
     try:
         get_package_share_directory('rviz2')
         return True
@@ -340,5 +347,5 @@ def generate_launch_description():
             parameters=[{'use_sim_time': LaunchConfiguration('use_sim')}],
             condition=IfCondition(LaunchConfiguration('rviz')),
             output='screen',
-        ) if _rviz_available() else LogInfo(msg='rviz2 not installed -- skipping RViz'),
+        ) if _rviz_available() else LogInfo(msg='rviz2 not installed or no display -- skipping RViz'),
     ])

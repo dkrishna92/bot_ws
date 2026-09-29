@@ -29,7 +29,8 @@
 
   <div class="row">
     <div class="panel">
-      <div><button id="btnStart">Start (bringup)</button></div>
+      <div><button id="btnStart">Start (bringup)</button>
+        <label>on map <select id="raceMap"><option value="">(loading...)</option></select></label></div>
       <div><button id="btnStop" class="danger">Stop</button></div>
       <hr style="border-color:#444; width:100%;">
       <div><button id="btnMappingNew">Start New Mapping Run</button></div>
@@ -145,7 +146,31 @@ bindHoldButton('btnLeft', 'a');
 bindHoldButton('btnRight', 'd');
 
 // Start / Stop / Mapping Run (new or resume) / Save (checkpoint or final).
-document.getElementById('btnStart').addEventListener('click', () => fetch('/api/launch/bringup', { method: 'POST' }));
+// Saved race maps for bringup ("map" first -- the launch's default).
+function loadMaps() {
+  const sel = document.getElementById('raceMap');
+  const keep = sel.value;
+  fetch('/api/maps').then(r => r.json()).then(d => {
+    sel.innerHTML = '';
+    for (const name of d.maps) {
+      const opt = document.createElement('option');
+      opt.value = opt.textContent = name;
+      sel.appendChild(opt);
+    }
+    if (!d.maps.length) sel.innerHTML = '<option value="">(no saved maps)</option>';
+    if (d.maps.includes(keep)) sel.value = keep;
+  });
+}
+loadMaps();
+document.getElementById('raceMap').addEventListener('focus', loadMaps);
+document.getElementById('btnStart').addEventListener('click', () => {
+  const map = document.getElementById('raceMap').value;
+  fetch('/api/launch/bringup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ map: map || null })
+  }).then(r => r.json()).then(s => { if (!s.ok) alert(s.message); });
+});
 document.getElementById('btnStop').addEventListener('click', () => fetch('/api/stop', { method: 'POST' }));
 
 function startMapping(resume, autonomous = false) {
@@ -174,7 +199,7 @@ function saveTo(endpoint) {
     body: JSON.stringify({ name: name || null })
   })
     .then(r => r.json())
-    .then(s => alert(s.message));
+    .then(s => { alert(s.message); loadMaps(); });
 }
 document.getElementById('btnSaveCheckpoint').addEventListener('click', () => saveTo('/api/save_checkpoint'));
 document.getElementById('btnSaveFinalMap').addEventListener('click', () => saveTo('/api/save_final_map'));
