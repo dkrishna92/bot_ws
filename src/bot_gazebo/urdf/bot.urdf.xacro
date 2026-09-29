@@ -262,6 +262,27 @@
     <child link="imu_link"/>
   </joint>
 
+  <!-- Ultrasonic frames. Two side-facing HC-SR04-class sensors (left/right,
+       see CLAUDE.md); bot_odometry publishes sensor_msgs/Range with these
+       frame_ids, and Nav2's range_sensor_layer needs the TF to place each
+       reading. +x is the beam direction; each points straight out its own
+       side. Measured 2026-09-29: 17.5 cm behind the chassis front panel
+       (between the tyres), on the left/right side panels, 9 cm above
+       ground. Range/FOV are still the unverified placeholders noted in
+       CLAUDE.md. Not simulated in Gazebo; these are TF-only frames. -->
+  <link name="ultrasonic_left"/>
+  <link name="ultrasonic_right"/>
+  <joint name="ultrasonic_left_joint" type="fixed">
+    <origin xyz="${chassis_front_x - 0.175} ${base_width/2} 0.09" rpy="0 0 ${pi/2}"/>
+    <parent link="base_link"/>
+    <child link="ultrasonic_left"/>
+  </joint>
+  <joint name="ultrasonic_right_joint" type="fixed">
+    <origin xyz="${chassis_front_x - 0.175} ${-base_width/2} 0.09" rpy="0 0 ${-pi/2}"/>
+    <parent link="base_link"/>
+    <child link="ultrasonic_right"/>
+  </joint>
+
   <!-- Gazebo plugins -->
   <gazebo reference="base_link">
     <material>Gazebo/Blue</material>

@@ -233,7 +233,20 @@ local_costmap:
       # pushed back") but were actually physics. Keep this in sync if
       # base_width/base_length change again.
       robot_radius: 0.26
-      plugins: ["obstacle_layer", "voxel_layer", "inflation_layer"]
+      plugins: ["obstacle_layer", "voxel_layer", "range_sensor_layer", "inflation_layer"]
+      # Two side-facing HC-SR04 ultrasonics (bot_odometry publishes
+      # sensor_msgs/Range on /ultrasonic/left|right) for close-range side
+      # coverage the forward-facing lidar/depth layers miss. Marking only:
+      # a no-echo reading is published as range>max_range, which this layer
+      # ignores (no false obstacle at max distance), and stale marks scroll
+      # out of the rolling local costmap. Needs the ultrasonic_left/right TF
+      # frames added in bot.urdf.xacro.
+      range_sensor_layer:
+        plugin: "nav2_costmap_2d::RangeSensorLayer"
+        enabled: true
+        topics: ["/ultrasonic/left", "/ultrasonic/right"]
+        input_sensor_type: "ALL"
+        clear_on_max_reading: false
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
