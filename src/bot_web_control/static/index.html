@@ -34,6 +34,7 @@
       <hr style="border-color:#444; width:100%;">
       <div><button id="btnMappingNew">Start New Mapping Run</button></div>
       <div><button id="btnMappingResume">Resume Mapping Run</button></div>
+      <div><button id="btnMappingAuto">Start Autonomous Mapping Run</button> (Nav2 + frontier exploration drive the robot -- wheels down, e-stop in hand)</div>
       <div>Initial pose for Resume (must match the robot's actual pose in the checkpoint when it was saved -- see <code>tf2_echo map base_link</code>):</div>
       <label>x <input type="number" id="poseX" value="0.0" step="0.1" style="width:5rem;"></label>
       <label>y <input type="number" id="poseY" value="0.0" step="0.1" style="width:5rem;"></label>
@@ -147,7 +148,7 @@ bindHoldButton('btnRight', 'd');
 document.getElementById('btnStart').addEventListener('click', () => fetch('/api/launch/bringup', { method: 'POST' }));
 document.getElementById('btnStop').addEventListener('click', () => fetch('/api/stop', { method: 'POST' }));
 
-function startMapping(resume) {
+function startMapping(resume, autonomous = false) {
   const pose = [
     document.getElementById('poseX').value,
     document.getElementById('poseY').value,
@@ -156,11 +157,14 @@ function startMapping(resume) {
   fetch('/api/launch/mapping', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ resume: resume, pose: pose })
+    body: JSON.stringify({ resume: resume, pose: pose, autonomous: autonomous })
   });
 }
 document.getElementById('btnMappingNew').addEventListener('click', () => startMapping(false));
 document.getElementById('btnMappingResume').addEventListener('click', () => startMapping(true));
+document.getElementById('btnMappingAuto').addEventListener('click', () => {
+  if (confirm('Autonomous mapping drives the robot on its own. E-stop in hand?')) startMapping(false, true);
+});
 
 function saveTo(endpoint) {
   const name = document.getElementById('mapName').value.trim();

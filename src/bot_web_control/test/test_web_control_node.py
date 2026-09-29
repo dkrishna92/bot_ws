@@ -44,7 +44,14 @@ def _make_node(linear_speed=0.3, angular_speed=1.0):
     node._checkpoint_path = "src/bot_bringup/config/maps/checkpoint"
     node._map_save_path = "src/bot_bringup/config/maps/map"
     node._cmd_pub = _FakePublisher()
+    # __new__ skips Node.__init__, so there's no real logger to return.
+    node.get_logger = lambda: _FakeLogger()
     return node
+
+
+class _FakeLogger:
+    def __getattr__(self, _level):
+        return lambda *args, **kwargs: None
 
 
 def _make_grid(data, width, height):
@@ -187,7 +194,7 @@ def test_start_launch_mapping_without_resume_has_no_resume_args(monkeypatch):
     captured = {}
     monkeypatch.setattr(
         "bot_web_control.web_control_node.subprocess.Popen",
-        lambda cmd, **kw: captured.setdefault("cmd", cmd) or _FakePopen(cmd, **kw),
+        lambda cmd, **kw: _FakePopen(captured.setdefault("cmd", cmd), **kw),
     )
 
     ok, _ = node.start_launch("mapping", resume=False)
@@ -204,7 +211,7 @@ def test_start_launch_mapping_with_resume_forwards_checkpoint_and_pose(monkeypat
     captured = {}
     monkeypatch.setattr(
         "bot_web_control.web_control_node.subprocess.Popen",
-        lambda cmd, **kw: captured.setdefault("cmd", cmd) or _FakePopen(cmd, **kw),
+        lambda cmd, **kw: _FakePopen(captured.setdefault("cmd", cmd), **kw),
     )
 
     ok, _ = node.start_launch("mapping", resume=True, resume_pose="1.2,3.4,0.5")
@@ -219,13 +226,28 @@ def test_start_launch_mapping_resume_defaults_pose_when_not_given(monkeypatch):
     captured = {}
     monkeypatch.setattr(
         "bot_web_control.web_control_node.subprocess.Popen",
-        lambda cmd, **kw: captured.setdefault("cmd", cmd) or _FakePopen(cmd, **kw),
+        lambda cmd, **kw: _FakePopen(captured.setdefault("cmd", cmd), **kw),
     )
 
     ok, _ = node.start_launch("mapping", resume=True, resume_pose=None)
 
     assert ok is True
     assert "resume_pose:=0.0,0.0,0.0" in captured["cmd"]
+
+
+def test_start_launch_mapping_autonomous_omits_teleop(monkeypatch):
+    node = _make_node()
+    captured = {}
+    monkeypatch.setattr(
+        "bot_web_control.web_control_node.subprocess.Popen",
+        lambda cmd, **kw: _FakePopen(captured.setdefault("cmd", cmd), **kw),
+    )
+
+    ok, _ = node.start_launch("mapping", autonomous=True)
+
+    assert ok is True
+    assert "mapping.launch.py" in captured["cmd"]
+    assert not any(a.startswith("teleop:=") for a in captured["cmd"])
 
 
 def test_start_launch_refuses_when_already_running():

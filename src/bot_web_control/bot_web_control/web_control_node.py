@@ -15,6 +15,10 @@ alongside an rclpy node, serving a single-page dashboard with:
     checkpoint instead of starting empty (see that file's docstring for
     the full mechanism, including why the initial pose also has to match
     wherever the sim robot actually spawns).
+  - Start Autonomous Mapping Run: mapping.launch.py WITHOUT teleop:=true,
+    so Nav2 + bot_explore's frontier_explore_node drive the robot around
+    unexplored space by themselves (blank map, no resume). Heavier than
+    teleop mapping -- runs the full Nav2 stack.
   - Save Checkpoint: calls slam_toolbox's /slam_toolbox/serialize_map
     service (NOT save_map -- see the note below) to checkpoint the
     in-progress map without ending the mapping run, so Resume Mapping Run
@@ -247,6 +251,7 @@ class WebControlNode(Node):
                         "mapping",
                         resume=bool(body.get("resume", False)),
                         resume_pose=body.get("pose"),
+                        autonomous=bool(body.get("autonomous", False)),
                     )
                     self._send_json({"ok": ok, "message": msg})
                 elif self.path == "/api/save_checkpoint":
@@ -425,7 +430,8 @@ class WebControlNode(Node):
             return False, err
         return True, f"saved final map as '{path}' (ready for bringup.launch.py)"
 
-    def start_launch(self, target: str, resume: bool = False, resume_pose: str | None = None):
+    def start_launch(self, target: str, resume: bool = False, resume_pose: str | None = None,
+                     autonomous: bool = False):
         with self._lock:
             if self._proc is not None and self._proc.poll() is None:
                 return False, f"'{self._proc_label}' is already running -- stop it first"
@@ -433,8 +439,12 @@ class WebControlNode(Node):
         cmd = ["ros2", "launch", "bot_bringup", launch_file,
                f"use_sim:={'true' if self._use_sim else 'false'}", f"world:={self._world}"]
         if target == "mapping":
-            # This tool's own teleop feature is what you'd drive it with.
-            cmd.append("teleop:=true")
+            # Default: this tool's own teleop feature is what you'd drive it
+            # with (mapping.launch.py skips Nav2 and frontier_explore_node).
+            # Autonomous leaves teleop at its false default, so Nav2 +
+            # frontier_explore_node drive the robot on their own.
+            if not autonomous:
+                cmd.append("teleop:=true")
             if resume:
                 # resume_pose is forwarded as-is (mapping.launch.py parses
                 # "x,y,yaw" itself) -- must be the robot's actual pose in

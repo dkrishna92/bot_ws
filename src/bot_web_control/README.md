@@ -47,6 +47,7 @@ across many runs.
 | --- | --- |
 | **Start (bringup)** | Runs `ros2 launch bot_bringup bringup.launch.py` (the race launch) with this dashboard's `use_sim` and `world`. |
 | **Mapping Run (teleop)** | Runs `mapping.launch.py teleop:=true`: SLAM builds a map while you drive with the teleop controls. With **Resume from checkpoint** ticked, it continues from the saved checkpoint map at the pose in the x / y / yaw fields instead of starting empty. |
+| **Start Autonomous Mapping Run** | Runs `mapping.launch.py` without `teleop:=true`: Nav2 and `bot_explore`'s frontier explorer drive the robot into unexplored space on their own while SLAM builds the map (always a fresh map). Asks for confirmation first. Heavier than teleop mapping, since it runs the full Nav2 stack. |
 | **Stop** | Sends Ctrl-C (SIGINT) to the running launch, force-kills it after 5 s, publishes a zero `/cmd_vel`, and, if `workspace_root` is set, runs `clean_robot.sh` (robot) or `clean_sim.sh` (sim) to catch leftover processes. It passes `--keep-dashboard`, so the dashboard itself keeps running. |
 | **Save Map (checkpoint)** | Calls slam_toolbox's `/slam_toolbox/save_map` to save the in-progress map as the checkpoint without ending the mapping run. |
 | **x / y / yaw (rad)** | The robot's pose in the checkpoint map, used when resuming. It must be where the robot actually was when the checkpoint was saved: read it with `ros2 run tf2_ros tf2_echo map base_link` before saving. On the real robot, place the robot back at that pose before resuming. |
@@ -111,7 +112,7 @@ The page is a thin client over these endpoints; `curl` works too, e.g.
 | GET | `/api/map.png` | Latest `/map` as a PNG; 503 if no map has arrived yet. |
 | POST | `/api/cmd_vel` | `{"linear": m/s, "angular": rad/s}`, published as `/cmd_vel` (resets the 0.5 s staleness timer). |
 | POST | `/api/launch/bringup` | Start the race launch. |
-| POST | `/api/launch/mapping` | Start a mapping run; body `{"resume": true, "pose": "x,y,yaw"}` to resume. |
+| POST | `/api/launch/mapping` | Start a mapping run; body `{"resume": true, "pose": "x,y,yaw"}` to resume, or `{"autonomous": true}` for frontier exploration instead of teleop. |
 | POST | `/api/save_map` | Save the checkpoint; optional body `{"name": "<path>"}`. |
 | POST | `/api/stop` | Stop the running launch (see Stop above). |
 
@@ -127,6 +128,3 @@ The page is a thin client over these endpoints; `curl` works too, e.g.
   installed and a monitor attached, RViz opens on the Pi's screen; without
   RViz installed, the launches skip it.
 - **One launch at a time.** Stop the current run before starting another.
-- **Three unit tests fail** (`test_start_launch_mapping_*`): the test
-  fixture builds the node without its logger. This predates the robot
-  bring-up and doesn't affect the dashboard itself.
