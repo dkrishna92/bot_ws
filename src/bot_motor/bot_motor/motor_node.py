@@ -51,13 +51,24 @@ class MotorNode(Node):
         # on newer Raspberry Pi OS kernels) -- check `gpioinfo` if pins don't move.
         self.declare_parameter("gpio_chip", 4)
         self.declare_parameter("pwm_frequency_hz", 10000)
-        self.declare_parameter("max_duty_cycle", 0.9)
+        # The Pololu #4843 motors are rated 12 V but run off a 4S pack
+        # (16.8 V full, ~16.2 V under load): 0.75 keeps the average motor
+        # voltage near 12 V on a full pack (2026-09-29, was 0.9 = ~15 V).
+        self.declare_parameter("max_duty_cycle", 0.75)
         # Deadband compensation -- see _set_channel's comment. Starting
         # value, 2026-09-28: NOT yet empirically tuned against the real
         # motors/chassis weight -- raise it if the motor still whines
         # without turning at this floor, lower it if it now jumps/lurches
         # on small commanded velocities.
         self.declare_parameter("min_duty_cycle", 0.25)
+        # Higher floor used only while the two sides turn in opposite
+        # directions (pivoting in place): skid-steer wheels have to scrub
+        # sideways, which needs far more torque than rolling straight, and
+        # Set from scripts/rotate.py (2026-09-29): pivoting on tile breaks
+        # away at 40% duty, so 0.45. Carpet needs much more (it wouldn't
+        # turn at 0.5) -- re-measure with rotate.py on the actual course
+        # surface and set this a few percent above its breakaway duty.
+        self.declare_parameter("min_turn_duty_cycle", 0.45)
         self.declare_parameter("cmd_vel_timeout_s", 0.3)
         self.declare_parameter("track_width_m", 0.32)
         self.declare_parameter("max_linear_speed_mps", 2.0)
@@ -94,6 +105,7 @@ class MotorNode(Node):
         self._freq = min(self.get_parameter("pwm_frequency_hz").value, LGPIO_MAX_PWM_HZ)
         self._max_duty = self.get_parameter("max_duty_cycle").value
         self._min_duty = self.get_parameter("min_duty_cycle").value
+        self._min_turn_duty = self.get_parameter("min_turn_duty_cycle").value
         self._timeout_s = self.get_parameter("cmd_vel_timeout_s").value
         self._track_width = self.get_parameter("track_width_m").value
         self._max_v = self.get_parameter("max_linear_speed_mps").value
@@ -153,15 +165,17 @@ class MotorNode(Node):
             self.get_logger().error("system fault asserted -- forcing motor stop")
         self._fault = msg.data
 
-    def _set_channel(self, chan: dict, duty: float) -> None:
+    def _set_channel(self, chan: dict, duty: float, min_duty: float | None = None) -> None:
         duty = max(-self._max_duty, min(self._max_duty, duty))
+        if min_duty is None:
+            min_duty = self._min_duty
         if self._h is None:
             return
         # _tick runs at 50 Hz; re-issuing tx_pwm restarts the software PWM
         # waveform, so only touch the pins when the command actually changes.
-        if chan.get("last_duty") == duty:
+        if chan.get("last_duty") == (duty, min_duty):
             return
-        chan["last_duty"] = duty
+        chan["last_duty"] = (duty, min_duty)
         forward = (duty >= 0) != chan["inverted"]
         lgpio.gpio_write(self._h, chan["dir"], 1 if forward else 0)
         # Below min_duty_cycle, PWM is too weak to overcome static/scrub
@@ -176,7 +190,7 @@ class MotorNode(Node):
         # scaling produce an arbitrarily weak signal.
         effective_duty = abs(duty)
         if effective_duty > 0.0:
-            effective_duty = max(effective_duty, self._min_duty)
+            effective_duty = min(max(effective_duty, min_duty), self._max_duty)
         lgpio.tx_pwm(self._h, chan["pwm"], self._freq, effective_duty * 100.0)
 
     def _stop_all(self) -> None:
@@ -209,8 +223,10 @@ class MotorNode(Node):
         v_left = v - w * self._track_width / 2.0
         v_right = v + w * self._track_width / 2.0
 
-        self._set_channel(self._chan_a, v_left / self._max_v)
-        self._set_channel(self._chan_b, v_right / self._max_v)
+        # Sides turning opposite ways = pivoting, which needs the higher floor
+        floor = self._min_turn_duty if v_left * v_right < 0 else self._min_duty
+        self._set_channel(self._chan_a, v_left / self._max_v, floor)
+        self._set_channel(self._chan_b, v_right / self._max_v, floor)
 
     def destroy_node(self) -> None:
         self._stop_all()

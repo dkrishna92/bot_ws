@@ -23,8 +23,14 @@ def node():
 
 def _capture_duty(node):
     calls = []
-    node._set_channel = lambda chan, duty: calls.append(duty)
+    node._set_channel = lambda chan, duty, min_duty=None: calls.append(duty)
     return calls
+
+
+def _capture_floor(node):
+    floors = []
+    node._set_channel = lambda chan, duty, min_duty=None: floors.append(min_duty)
+    return floors
 
 
 def test_no_cmd_received_yet_stops(node):
@@ -119,3 +125,30 @@ def test_zero_duty_is_not_clamped_up_to_min_duty_cycle(node, monkeypatch):
     node._set_channel(node._chan_a, 0.0)
 
     assert fake.tx_pwm_calls == [pytest.approx(0.0)]
+
+
+def test_pivot_in_place_uses_turn_floor(node):
+    msg = Twist()
+    msg.angular.z = 1.0  # sides turn opposite ways
+    node._on_cmd_vel(msg)
+    floors = _capture_floor(node)
+    node._tick()
+    assert floors == [node._min_turn_duty, node._min_turn_duty]
+
+
+def test_straight_and_gentle_arc_use_normal_floor(node):
+    msg = Twist()
+    msg.linear.x = 1.0
+    msg.angular.z = 0.5  # both sides still forward
+    node._on_cmd_vel(msg)
+    floors = _capture_floor(node)
+    node._tick()
+    assert floors == [node._min_duty, node._min_duty]
+
+
+def test_small_pivot_duty_is_clamped_to_min_turn_duty_cycle(node, monkeypatch):
+    fake = _make_reachable(node, monkeypatch)
+
+    node._set_channel(node._chan_a, -0.08, node._min_turn_duty)  # ~1 rad/s pivot
+
+    assert fake.tx_pwm_calls == [pytest.approx(node._min_turn_duty * 100.0)]
