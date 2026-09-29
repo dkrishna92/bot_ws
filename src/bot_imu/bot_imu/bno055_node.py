@@ -7,10 +7,15 @@ magnetometer-near-motors caution noted there still apply and haven't been
 re-verified against real hardware here.
 
 Publishes sensor_msgs/Imu on "imu", matching bot_bringup/config/
-ekf_params.yaml's imu0 topic. The chip's own NDOF fusion mode is used, so
-orientation is the BNO055's absolute, magnetically-referenced quaternion,
-not integrated here -- same trust assumption ekf_params.yaml already
-documents (imu0_relative: false).
+ekf_params.yaml's imu0 topic. Orientation is the chip's own fused
+quaternion, not integrated here. Fusion mode (the fusion_mode param):
+  - "imuplus" (default): gyro + accel only. Heading is relative to
+    power-on and drifts slowly, but the motors can't disturb it.
+  - "ndof": adds the magnetometer for an absolute heading. Switched away
+    from 2026-09-29: on the robot the chip reported CALIB_STAT sys=0 mag=0
+    (uncalibrated) with the motors ~9 cm away, and its heading re-snapped
+    as the magnetometer calibration changed -- mapping runs came out as
+    two copies of the room rotated ~25-30 deg apart.
 
 Uses smbus2 for I2C, same "import guarded, dry-run on non-Pi dev
 machines" pattern as bot_motor's RPi.GPIO usage.
@@ -40,6 +45,8 @@ _PWR_MODE_ADDR = 0x3E
 
 _CONFIG_MODE = 0x00
 _NDOF_MODE = 0x0C
+_IMUPLUS_MODE = 0x08
+_FUSION_MODES = {"imuplus": _IMUPLUS_MODE, "ndof": _NDOF_MODE}
 _NORMAL_POWER_MODE = 0x00
 _UNIT_SEL_GYRO_RPS = 0x02  # bit1=1: gyro output in rad/s instead of deg/s
 
@@ -72,9 +79,15 @@ class Bno055Node(Node):
         self.declare_parameter("i2c_address", 0x28)
         self.declare_parameter("frame_id", "imu_link")
         self.declare_parameter("rate_hz", 50.0)
+        self.declare_parameter("fusion_mode", "imuplus")  # see module docstring
 
         self._address = self.get_parameter("i2c_address").value
         self._frame_id = self.get_parameter("frame_id").value
+        mode_name = self.get_parameter("fusion_mode").value
+        if mode_name not in _FUSION_MODES:
+            self.get_logger().error(f"unknown fusion_mode '{mode_name}' -- using imuplus")
+            mode_name = "imuplus"
+        self._fusion_mode = _FUSION_MODES[mode_name]
 
         self._orientation_covariance = _diag_covariance(_ORIENTATION_STDDEV_RAD)
         self._angular_velocity_covariance = _diag_covariance(_ANGULAR_VELOCITY_STDDEV_RAD_S)
@@ -104,7 +117,7 @@ class Bno055Node(Node):
         time.sleep(0.02)
         self._bus.write_byte_data(self._address, _PWR_MODE_ADDR, _NORMAL_POWER_MODE)
         self._bus.write_byte_data(self._address, _UNIT_SEL_ADDR, _UNIT_SEL_GYRO_RPS)
-        self._bus.write_byte_data(self._address, _OPR_MODE_ADDR, _NDOF_MODE)
+        self._bus.write_byte_data(self._address, _OPR_MODE_ADDR, self._fusion_mode)
         time.sleep(0.02)
 
     @staticmethod

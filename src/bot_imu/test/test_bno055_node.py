@@ -1,8 +1,8 @@
 """Behavior tests for bno055_node's Imu message construction.
 
-Runs in dry-run mode (smbus2 absent) -- _read_i16 is monkeypatched per
-test so _tick's message-building logic is exercised without a real I2C
-bus (which would be flaky/impossible to simulate here).
+Runs in dry-run mode (smbus2 absent) -- a fake bus answers _tick's one
+32-byte block read (accel 0x08 .. quaternion 0x27) so its message-building
+logic is exercised without a real I2C bus.
 """
 import pytest
 import rclpy
@@ -22,6 +22,17 @@ def node():
 
 
 class _FakeBus:
+    """Serves read_i2c_block_data from a {register: signed 16-bit value} map."""
+
+    def __init__(self, raw_by_addr):
+        self._regs = {}
+        for addr, value in raw_by_addr.items():
+            value &= 0xFFFF
+            self._regs[addr], self._regs[addr + 1] = value & 0xFF, value >> 8
+
+    def read_i2c_block_data(self, address, start, length):
+        return [self._regs.get(start + i, 0) for i in range(length)]
+
     def close(self):
         pass
 
@@ -40,8 +51,6 @@ def test_tick_is_noop_without_a_bus(node):
 
 def test_quaternion_and_rates_are_scaled_and_published(node):
     captured = _capture_publisher(node)
-    node._bus = _FakeBus()  # any non-None sentinel; _read_i16 is stubbed below
-
     raw_by_addr = {
         0x20: int(1.0 / _QUA_LSB_PER_UNIT),  # w
         0x22: 0,  # x
@@ -54,7 +63,7 @@ def test_quaternion_and_rates_are_scaled_and_published(node):
         0x0A: 0,
         0x0C: 0,
     }
-    node._read_i16 = lambda addr: raw_by_addr[addr]
+    node._bus = _FakeBus(raw_by_addr)
 
     node._tick()
 

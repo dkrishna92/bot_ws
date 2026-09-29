@@ -60,8 +60,8 @@ ekf_filter_node:
     odom0_differential: false
     odom0_relative: false
 
-    # IMU: Bosch BNO055 (bot.urdf.xacro's imu_link in sim; real mounting
-    # location/interface TBD, see CLAUDE.md open items). Fuses only yaw and
+    # IMU: Bosch BNO055 (bot.urdf.xacro's imu_link; mounted 2026-09-28, see
+    # CLAUDE.md's Hardware section). Fuses only yaw and
     # yaw rate (indices 5, 11), not x/y/z or roll/pitch: this is a
     # skid-steer robot that can only really trust 2D motion anyway
     # (two_d_mode above), and wheel-encoder-based heading is the specific
@@ -80,20 +80,17 @@ ekf_filter_node:
                   false, false, false]
     imu0_queue_size: 10
     imu0_differential: false
-    # false: trust the BNO055's own orientation output as an absolute world
-    # reference rather than relative-to-first-value. Unlike a bare
-    # gyro/accel-only IMU, the BNO055 has an onboard magnetometer and runs
-    # its own internal sensor fusion (NDOF mode), producing a
-    # magnetically-referenced absolute heading directly from the chip, not
-    # just integrated gyro drift. Caveat: that magnetometer fusion is
-    # commonly reported to degrade near motor current/magnetic
-    # fields, exactly what this robot's Pololu G2 driver and DC motors
-    # produce, so this assumes reasonable mounting distance and completed
-    # on-robot calibration. If real-world testing shows the heading
-    # jumping/drifting near the motors, switch this back to true (fall
-    # back to gyro-integrated relative heading) rather than trust a
-    # corrupted absolute reference.
-    imu0_relative: false
+    # true: heading relative to the first IMU reading, so odom starts at
+    # yaw 0 with the robot. Switched 2026-09-29 together with bno055_node
+    # moving from NDOF (magnetometer-referenced absolute heading) to
+    # IMUPLUS (gyro + accel, no magnetometer): on the robot the chip
+    # reported CALIB_STAT mag=0 with the motors ~9 cm away, its absolute
+    # heading re-snapped as the magnetometer calibration changed, and a
+    # mapping run came out as two copies of the room rotated ~25-30 deg
+    # apart. IMUPLUS heading is only meaningful relative to power-on (and
+    # the chip X axis faces backwards, so its zero is the robot's 180 deg),
+    # hence relative here. Slow gyro drift is left to slam_toolbox/AMCL.
+    imu0_relative: true
 
     # Process noise covariance matrix -- diagonal-only form (15 values, one
     # per state dimension); robot_localization also accepts a full 15x15
