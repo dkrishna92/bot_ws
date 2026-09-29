@@ -16,6 +16,7 @@ Usage (normally included, but runnable alone for bench-testing sensors):
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, LogInfo
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node, LoadComposableNodes
@@ -51,6 +52,30 @@ def generate_launch_description():
             'teensy_port',
             default_value='/dev/teensy',
             description='Teensy (encoders + ultrasonics) serial device (udev symlink from scripts/setup_pi.sh; /dev/ttyACM0 otherwise)',
+        ),
+        DeclareLaunchArgument(
+            'use_lidar',
+            default_value='true',
+            description=(
+                'Start the RPLIDAR driver. Set false to bring up the stack '
+                'with the lidar absent/unplugged. NOTE: /scan feeds amcl '
+                '(bringup) / slam_toolbox (mapping) AND watchdog_node, so '
+                'with no lidar there is no localization and watchdog_node '
+                'faults on the stale scan (motors held stopped) -- this is a '
+                'bench/bring-up mode for the other sensors, not drivable.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'use_oak',
+            default_value='true',
+            description=(
+                'Start the OAK-D driver + depth point cloud. Set false to '
+                'run with the camera absent: Nav2 loses the depth voxel_layer '
+                '(lidar obstacle_layer still works) and start_trigger_node '
+                'gets no frames, so the vision start is unavailable -- start '
+                'the race manually instead (see RACE_DAY.md). Localization '
+                'and driving are otherwise unaffected.'
+            ),
         ),
 
         # Static TF from the same URDF sim uses. Wheel joints are continuous
@@ -104,6 +129,7 @@ def generate_launch_description():
                 executable='sllidar_node',
                 name='sllidar_node',
                 output='screen',
+                condition=IfCondition(LaunchConfiguration('use_lidar')),
                 parameters=[
                     PathJoinSubstitution([pkg_bringup, 'config', 'rplidar_params.yaml']),
                     {'serial_port': LaunchConfiguration('lidar_port')},
@@ -125,7 +151,7 @@ def generate_launch_description():
     # PythonExpression('not true') and the whole launch dies with
     # "name 'true' is not defined".
     if pkg_oak is not None:
-        actions.append(GroupAction(scoped=True, actions=[
+        actions.append(GroupAction(scoped=True, condition=IfCondition(LaunchConfiguration('use_oak')), actions=[
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     PathJoinSubstitution([pkg_oak, 'launch', 'camera.launch.py'])
@@ -153,6 +179,7 @@ def generate_launch_description():
         actions.append(
             LoadComposableNodes(
                 target_container='/oak_container',
+                condition=IfCondition(LaunchConfiguration('use_oak')),
                 composable_node_descriptions=[
                     ComposableNode(
                         package='depth_image_proc',

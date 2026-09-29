@@ -187,6 +187,16 @@ def generate_launch_description():
             description='Launch RViz2 with the Nav2 default view',
         ),
         DeclareLaunchArgument(
+            'use_lidar',
+            default_value='true',
+            description='Start the RPLIDAR driver (see hardware.launch.py). false = no localization, not drivable.',
+        ),
+        DeclareLaunchArgument(
+            'use_oak',
+            default_value='true',
+            description='Start the OAK-D driver (see hardware.launch.py). false disables the vision start; start manually.',
+        ),
+        DeclareLaunchArgument(
             'nav2_params_file',
             default_value='nav2_params.yaml',
             description=(
@@ -257,6 +267,10 @@ def generate_launch_description():
                 PathJoinSubstitution([pkg_bringup, 'launch', 'hardware.launch.py'])
             ),
             condition=UnlessCondition(LaunchConfiguration('use_sim')),
+            launch_arguments={
+                'use_lidar': LaunchConfiguration('use_lidar'),
+                'use_oak': LaunchConfiguration('use_oak'),
+            }.items(),
         ),
 
         # Vision-based autonomous start trigger (bot_perception) -- runs in

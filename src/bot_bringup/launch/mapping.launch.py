@@ -159,6 +159,16 @@ def generate_launch_description():
             description='Launch RViz2 with the Nav2 default view',
         ),
         DeclareLaunchArgument(
+            'use_lidar',
+            default_value='true',
+            description='Start the RPLIDAR driver (see hardware.launch.py). SLAM needs it -- false only for bench tests.',
+        ),
+        DeclareLaunchArgument(
+            'use_oak',
+            default_value='true',
+            description='Start the OAK-D driver (see hardware.launch.py). Not needed to map; false runs lidar-only.',
+        ),
+        DeclareLaunchArgument(
             'teleop',
             default_value='false',
             description=(
@@ -225,6 +235,10 @@ def generate_launch_description():
                 PathJoinSubstitution([pkg_bringup, 'launch', 'hardware.launch.py'])
             ),
             condition=UnlessCondition(LaunchConfiguration('use_sim')),
+            launch_arguments={
+                'use_lidar': LaunchConfiguration('use_lidar'),
+                'use_oak': LaunchConfiguration('use_oak'),
+            }.items(),
         ),
 
         # Odometry fusion -- slam_toolbox's scan matching is more accurate
