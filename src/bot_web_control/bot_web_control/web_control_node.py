@@ -252,6 +252,10 @@ class WebControlNode(Node):
         self._reader_blocklist = list(self.get_parameter("topic_reader_blocklist").value)
         self.create_timer(2.0, self._expire_watched)
         self.create_timer(0.1, self._teleop_watchdog_tick)
+        # Rosbag of the running launch (scripts/record_run.sh), see start_recording
+        self._rec_proc: subprocess.Popen | None = None
+        self._rec_path: str | None = None
+        self.create_timer(2.0, self._check_recording)
 
         node = self
 
@@ -336,7 +340,9 @@ class WebControlNode(Node):
                     body = self._read_json()
                     ok, msg = node.start_launch("bringup", map_name=body.get("map"),
                                                 nav2_params=body.get("nav2_params"),
-                                                max_speed=body.get("max_speed"), max_turn=body.get("max_turn"))
+                                                max_speed=body.get("max_speed"), max_turn=body.get("max_turn"),
+                                                record=bool(body.get("record", False)),
+                                                record_camera=bool(body.get("record_camera", False)))
                     self._send_json({"ok": ok, "message": msg})
                 elif self.path == "/api/launch/mapping":
                     body = self._read_json()
@@ -356,6 +362,8 @@ class WebControlNode(Node):
                         map_name=body.get("route_name"),
                         max_speed=body.get("max_speed"),
                         max_turn=body.get("max_turn"),
+                        record=bool(body.get("record", False)),
+                        record_camera=bool(body.get("record_camera", False)),
                     )
                     self._send_json({"ok": ok, "message": msg})
                 elif self.path in ("/api/route/add", "/api/route/undo", "/api/route/clear", "/api/route/start"):
@@ -947,7 +955,8 @@ class WebControlNode(Node):
     def start_launch(self, target: str, resume: bool = False, resume_pose: str | None = None,
                      autonomous: bool = False, map_name: str | None = None,
                      nav2_params: str | None = None, checkpoint_name: str | None = None,
-                     race: bool = False, max_speed: float | None = None, max_turn: float | None = None):
+                     race: bool = False, max_speed: float | None = None, max_turn: float | None = None,
+                     record: bool = False, record_camera: bool = False):
         with self._lock:
             if self._proc is not None and self._proc.poll() is None:
                 return False, f"'{self._proc_label}' is already running -- stop it first"
@@ -1025,9 +1034,75 @@ class WebControlNode(Node):
         with self._lock:
             self._latest_map = None
         self.get_logger().info(f"started {launch_file} (pid {proc.pid}): {' '.join(cmd[4:])}")
-        return True, f"started {launch_file}" + (" in race mode" if race else "")
+        msg = f"started {launch_file}" + (" in race mode" if race else "")
+        if record:
+            kind = ("race" if race else "bringup" if target == "bringup" else
+                    "resume" if resume else "auto" if autonomous else "mapping")
+            msg += "; " + self.start_recording(f"{(map_name or 'map').strip() or 'map'}_{kind}", record_camera)[1]
+        return True, msg
+
+    # ---- rosbag recording ------------------------------------------------
+
+    def start_recording(self, name: str, camera: bool = False) -> tuple[bool, str]:
+        """Record the running launch to runs/<name>_<date-time>/ via
+        scripts/record_run.sh (one topic list for the dashboard and by-hand
+        use). Stopped by Stop, or automatically once the launch exits."""
+        self.stop_recording()
+        script = os.path.join(self._workspace_root, "scripts", "record_run.sh") if self._workspace_root else ""
+        if not os.path.isfile(script):
+            return False, "not recording (no workspace_root/scripts/record_run.sh)"
+        if not re.fullmatch(r"[\w.-]+", name):
+            name = "run"
+        runs = os.path.join(self._workspace_root, "runs")
+        os.makedirs(runs, exist_ok=True)
+        out = os.path.join(runs, f"{name}_{time.strftime('%Y%m%d_%H%M%S')}")
+        try:
+            with open(out + ".log", "w") as log:
+                proc = subprocess.Popen([script, name, "--out", out] + ([] if camera else ["--no-camera"]),
+                                        stdout=log, stderr=subprocess.STDOUT, preexec_fn=os.setsid)
+        except OSError as exc:
+            return False, f"not recording ({exc})"
+        with self._lock:
+            self._rec_proc, self._rec_path = proc, out
+        rel = os.path.relpath(out, self._workspace_root)
+        self.get_logger().info(f"recording rosbag to {rel}")
+        return True, f"recording {rel}"
+
+    def stop_recording(self) -> str | None:
+        """SIGTERM the recorder and wait for it to finish writing the bag
+        (rosbag2 closes the bag cleanly on SIGTERM, and it still works if
+        SIGINT is ignored; a SIGKILLed mcap bag needs `ros2 bag reindex`).
+        Returns the bag's path, or None if nothing was recording."""
+        with self._lock:
+            proc, path = self._rec_proc, self._rec_path
+            self._rec_proc = self._rec_path = None
+        if proc is None:
+            return None
+        if proc.poll() is None:
+            try:
+                pgid = os.getpgid(proc.pid)
+                os.killpg(pgid, signal.SIGTERM)
+                try:
+                    proc.wait(timeout=15.0)
+                except subprocess.TimeoutExpired:
+                    os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        self.get_logger().info(f"rosbag closed: {path}")
+        return path
+
+    def _check_recording(self) -> None:
+        """A launch that died on its own (crash, Ctrl-C) ends its recording too."""
+        with self._lock:
+            recording = self._rec_proc is not None
+            launch_alive = self._proc is not None and self._proc.poll() is None
+        if recording and not launch_alive:
+            threading.Thread(target=self.stop_recording, daemon=True).start()
 
     def stop_launch(self):
+        # The recorder first, so the cleanup sweep below can't cut it off
+        # mid-write.
+        bag = self.stop_recording()
         with self._lock:
             proc, label = self._proc, self._proc_label
             self._proc = None
@@ -1059,12 +1134,15 @@ class WebControlNode(Node):
         with self._lock:
             self._zeroed_since_stale = True
         msg = f"stopped '{label}'" if stopped_any else "nothing was running"
+        if bag:
+            msg += f"; rosbag saved to {os.path.relpath(bag, self._workspace_root or '.')}"
         return True, msg
 
     def status(self):
         with self._lock:
             running = self._proc_label if (self._proc is not None and self._proc.poll() is None) else None
             map_available = self._latest_map is not None
+            rec = self._rec_path
         now = time.monotonic()
         cmd = self._latest_cmd
         # Map pose: whichever of slam_toolbox (mapping) / AMCL (racing) is newest
@@ -1073,6 +1151,7 @@ class WebControlNode(Node):
         return {
             "running": running,
             "map_available": map_available,
+            "recording": os.path.relpath(rec, self._workspace_root or ".") if rec else None,
             "linear_speed": self._linear_speed,
             "angular_speed": self._angular_speed,
             "cmd_vel": None if cmd is None else {

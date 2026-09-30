@@ -219,15 +219,31 @@ docstring for resume / checkpoint options.
 
 ## Recording a run (training / debugging)
 
-Record a pass (e.g. teleop through the car wash) while bringup or mapping
-runs — lidar, odometry, EKF, IMU, TF, drive commands, map and the compressed
-camera image (~3 MB/s) go to `runs/<name>_<date-time>/`:
+The dashboard records every launch it starts (**Record rosbag**, on by
+default; tick **+ camera** for the OAK image, ~3 MB/s more). Stop closes the
+bag and says where it went: `~/bot_ws/runs/<map>_<kind>_<date-time>/` on
+the Pi (kind = mapping / resume / auto / race / bringup). It holds lidar,
+odometry, EKF, IMU, TF, drive commands, slam pose and the map. The status
+line shows "recording runs/..." while it runs. By hand (second terminal):
 
 ```bash
 scripts/record_run.sh carwash               # Ctrl-C to stop
 scripts/record_run.sh carwash --no-camera   # smaller
 scripts/record_run.sh --stop                # stop one started in the background
 ```
+
+Study a run later, on the laptop:
+
+```bash
+ssh robot-pi "tar cf - -C bot_ws/runs speed_mapping_20261001_093000" | tar xf - -C runs/
+ros2 bag info runs/speed_mapping_20261001_093000
+scripts/replay_mapping.sh runs/speed_mapping_20261001_093000            # re-map from scratch
+scripts/replay_mapping.sh runs/... --overrides my_slam.yaml --rviz      # try other SLAM settings
+scripts/replay_mapping.sh runs/... --as-recorded --rviz                 # watch what happened
+```
+
+The re-map writes `<bag>_replay.pgm/.yaml/.posegraph` next to the bag, so a
+better map from new settings can be copied into `config/maps/` and raced.
 
 ## Bench / field test scripts (no ROS -- stop the launch first)
 

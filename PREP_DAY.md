@@ -87,7 +87,9 @@ recorded start pose, and every race starts on exactly that spot.
 ### Block 2: map both courses (about 2 h)
 For each course, in the dashboard:
 1. Robot on the marked start spot, then **Start New Mapping Run** (teleop).
-   In another terminal, run `scripts/record_run.sh <course>_map`.
+   Keep **Record rosbag** ticked: every run is saved under `runs/` so a
+   bad map can be re-made later with other SLAM settings
+   (`scripts/replay_mapping.sh`, RACE_DAY.md "Recording a run").
 2. Enter the course name (e.g. `speed`) in **Map name**, then press
    **Set race start pose here** while still on the start spot.
 3. Drive the course **slowly, with gentle turns**: use **Q/E** (veer
@@ -122,7 +124,7 @@ For each course, in the dashboard:
    **OK: localized**. If it says NOT LOCALIZED, the start pose is wrong: see
    the failure guide below.
 3. Start with the manual start (see RACE_DAY.md step 5) or the real signal.
-   Watch the Live panel (pose, cmd_vel), with `scripts/record_run.sh` running.
+   Watch the Live panel (pose, cmd_vel); the run is recorded (Record rosbag).
 4. Goal: one clean lap, then 3 laps, then raise the cap step by step (0.6,
    0.8, ... up to none).
 5. **Start signal:** at the start spot run `scripts/test_start_signal.py
@@ -152,7 +154,7 @@ For each course, in the dashboard:
 | Lanes rotated / wrong direction | Heading | `scripts/check_heading.py` while turning. IMU flagged → fix the IMU. slam flagged → dashboard **SLAM settings**: `minimum_time_interval` 0.2, `angle_variance_penalty` 2.0, `do_loop_closing` false (test); drive slower through turns |
 | Smeared or doubled everywhere | IMU not publishing, or odometry wrong | Check `/imu` in the Live panel / topic reader; drive slower (the encoders over-count under load) |
 | Good lanes, then one bad jump | A false loop closure, or one fast turn | **Resume** from the last good checkpoint and remap that section |
-| Pi slows down or crashes | CPU | `record_run.sh --no-camera`; raise `minimum_time_interval` again |
+| Pi slows down or crashes | CPU | untick "+ camera" (or Record rosbag); raise `minimum_time_interval` again |
 
 **Plan A′, map in pieces (up to about 1 h):** one section at a time, with
 **Save Checkpoint** after each good one and **Resume** if the next goes wrong.
@@ -196,7 +198,7 @@ Look in the launch output (or the dashboard's terminal) for `FATAL`,
 | 11 | `GPIO busy`, `scan stale`, `could not open port` | A previous launch still holds the hardware | `scripts/clean_robot.sh`, then relaunch |
 | 12 | Dashboard shows nothing (no pose/cmd_vel) while bringup runs | Dashboard and launch on different ROS domains. **Fixed tonight:** bringup used to force domain 0 | Start everything from the same shell environment |
 | 13 | Robot reacts to things it shouldn't / strange `/cmd_vel` | Another team's ROS 2 robot on the same Wi-Fi and domain | On the Pi, before starting the dashboard: `export ROS_DOMAIN_ID=<unusual number>` and `export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST` (the browser dashboard still works; only laptop RViz stops seeing topics) |
-| 14 | `Control loop missed its desired rate` / sluggish | Pi CPU | Speed cap, `record_run.sh --no-camera`, no topic reader on heavy topics |
+| 14 | `Control loop missed its desired rate` / sluggish | Pi CPU | Speed cap, untick "+ camera" (or Record rosbag), no topic reader on heavy topics |
 | 15 | "Timed out waiting for transform" for more than about 10 s | EKF or odometry not running (Teensy port, or an IMU problem) | `check_hardware.sh --topics` |
 
 Harmless: RViz `process has died ... exit code -6` (no display; it's

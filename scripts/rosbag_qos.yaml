@@ -1,0 +1,8 @@
+# QoS overrides for scripts/record_run.sh (ros2 bag record
+# --qos-profile-overrides-path). Without this the recorder never received
+# the latched /tf_static (0 messages in a 90 s sim bag, 2026-09-30), and a
+# bag without the lidar/IMU mount transforms can't be replayed through SLAM.
+/tf_static:
+  history: keep_all
+  reliability: reliable
+  durability: transient_local

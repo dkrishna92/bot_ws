@@ -34,6 +34,8 @@ def _make_node(linear_speed=0.3, angular_speed=1.0):
     node._zeroed_since_stale = True
     node._proc = None
     node._proc_label = None
+    node._rec_proc = None
+    node._rec_path = None
     node._linear_speed = linear_speed
     node._angular_speed = angular_speed
     node._max_linear_speed = 1.0
@@ -873,3 +875,54 @@ def test_starting_a_launch_clears_the_previous_map(tmp_path, monkeypatch):
                         lambda cmd, **kw: _FakePopen(cmd, **kw))
     node.start_launch("mapping")
     assert node.status()["map_available"] is False
+
+
+# ---- rosbag recording ----
+
+def _rec_node(tmp_path, monkeypatch):
+    node = _make_node()
+    node._workspace_root = str(tmp_path)
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "record_run.sh").write_text("#!/bin/sh\n")
+    cmds = []
+    monkeypatch.setattr("bot_web_control.web_control_node.subprocess.Popen",
+                        lambda cmd, **kw: cmds.append(cmd) or _FakePopen(cmd, **kw))
+    return node, cmds
+
+
+def test_record_starts_record_run_next_to_the_launch(tmp_path, monkeypatch):
+    node, cmds = _rec_node(tmp_path, monkeypatch)
+    ok, msg = node.start_launch("mapping", map_name="desk", record=True)
+    assert ok is True and "recording runs/desk_mapping_" in msg
+    rec = cmds[1]
+    assert rec[0].endswith("scripts/record_run.sh") and rec[1] == "desk_mapping"
+    assert rec[2] == "--out" and "/runs/desk_mapping_" in rec[3] and "--no-camera" in rec
+    assert node.status()["recording"].startswith("runs/desk_mapping_")
+
+
+def test_record_camera_and_kind_names(tmp_path, monkeypatch):
+    node, cmds = _rec_node(tmp_path, monkeypatch)
+    node.start_launch("mapping", autonomous=True, record=True, record_camera=True)
+    assert cmds[1][1] == "map_auto" and "--no-camera" not in cmds[1]
+
+
+def test_no_record_flag_starts_no_recorder(tmp_path, monkeypatch):
+    node, cmds = _rec_node(tmp_path, monkeypatch)
+    node.start_launch("mapping", map_name="desk")
+    assert len(cmds) == 1 and node.status()["recording"] is None
+
+
+def test_stop_closes_the_recording_and_reports_the_bag(tmp_path, monkeypatch):
+    node, _ = _rec_node(tmp_path, monkeypatch)
+    node.start_launch("mapping", map_name="desk", record=True)
+    signals = []
+    monkeypatch.setattr("bot_web_control.web_control_node.os.getpgid", lambda pid: pid)
+    monkeypatch.setattr("bot_web_control.web_control_node.os.killpg", lambda pgid, sig: signals.append(sig))
+    monkeypatch.setattr(_FakePopen, "wait", lambda self, timeout=None: 0, raising=False)
+    node._workspace_root = str(tmp_path)
+    monkeypatch.setattr(node, "_cmd_pub", _FakePublisher())
+    (tmp_path / "scripts" / "record_run.sh").unlink()  # skip the clean script branch lookups
+    ok, msg = node.stop_launch()
+    assert "rosbag saved to runs/desk_mapping_" in msg
+    assert signals[0] == __import__("signal").SIGTERM
+    assert node.status()["recording"] is None

@@ -59,7 +59,11 @@
   <div class="row">
     <div class="panel controls">
       <div class="stopbar"><button id="btnStop" class="danger">Stop</button>
-        <span class="note">ends whatever is running (mapping or race) -- NOT an e-stop</span></div>
+        <span class="note">ends whatever is running (mapping or race) -- NOT an e-stop</span>
+        <div><label><input type="checkbox" id="recBag" checked> Record rosbag</label>
+          <label><input type="checkbox" id="recCamera"> + camera (~3 MB/s)</label>
+          <span class="note">each launch -&gt; runs/&lt;map&gt;_&lt;kind&gt;_&lt;time&gt;/ (lidar, odom, IMU, TF, cmd_vel, map); replay with scripts/replay_mapping.sh</span></div>
+        <div id="stopMsg" class="note"></div></div>
 
       <section class="step">
         <h2>1 &middot; Course</h2>
@@ -304,10 +308,17 @@ document.getElementById('btnStart').addEventListener('click', () => {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ map: map || null, nav2_params: document.getElementById('nav2Bringup').value || null,
-                           ...speedCaps() })
+                           ...speedCaps(), ...recOpts() })
   }).then(r => r.json()).then(s => { if (!s.ok) alert(s.message); });
 });
-document.getElementById('btnStop').addEventListener('click', () => fetch('/api/stop', { method: 'POST' }));
+document.getElementById('btnStop').addEventListener('click', () =>
+  fetch('/api/stop', { method: 'POST' }).then(r => r.json())
+    .then(s => { document.getElementById('stopMsg').textContent = s.message || ''; }));
+
+function recOpts() {
+  return { record: document.getElementById('recBag').checked,
+           record_camera: document.getElementById('recCamera').checked };
+}
 
 function speedCaps() {
   const v = parseFloat(document.getElementById('capSpeed').value), w = parseFloat(document.getElementById('capTurn').value);
@@ -326,7 +337,7 @@ function startMapping(resume, autonomous = false, race = false) {
                            name: document.getElementById('ckptName').value.trim() || null,
                            base: document.getElementById('mapName').value.trim(),
                            race: race, route_name: document.getElementById('mapName').value.trim() || null,
-                           ...speedCaps(),
+                           ...speedCaps(), ...recOpts(),
                            nav2_params: document.getElementById('nav2Mapping').value || null })
   }).then(r => r.json()).then(s => { if (!s.ok) alert(s.message); });
 }
@@ -425,7 +436,8 @@ function refreshStatus() {
   fetch('/api/status').then(r => r.json()).then(s => {
     document.getElementById('status').textContent =
       'status: ' + (s.running ? ('running: ' + s.running) : 'idle') +
-      (s.map_available ? ' | map available' : ' | no map yet');
+      (s.map_available ? ' | map available' : ' | no map yet') +
+      (s.recording ? ' | \u25CF recording ' + s.recording : '');
     mapAvailable = s.map_available;
     document.getElementById('mapImg').style.display = mapAvailable ? 'block' : 'none';
     document.getElementById('mapEmpty').style.display = mapAvailable ? 'none' : 'flex';
