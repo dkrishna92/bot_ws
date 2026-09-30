@@ -11,7 +11,11 @@ from bot_imu.bno055_node import Bno055Node, _QUA_LSB_PER_UNIT
 
 
 @pytest.fixture
-def node():
+def node(monkeypatch):
+    # Force dry-run even where smbus2 IS installed (the Pi): otherwise the
+    # node opens its default I2C bus for real -- on the race Pi that's
+    # I2C1, which times out -- and every test errors.
+    monkeypatch.setattr("bot_imu.bno055_node.SMBus", None)
     rclpy.init()
     n = Bno055Node()
     try:
