@@ -403,12 +403,13 @@ Laptop-first, Pi 5 for final integration:
   ~110 deg/s, so this floor makes small pivot corrections overshoot; a
   kick-start (high floor only for the first ~150 ms of a pivot) would fix it.
   Straight-line calibration, same day (drive_straight.py + tape): breakaway
-  28% (`min_duty_cycle` 0.25 -> 0.30); cruise 1.31 m/s at 35%, 1.66 m/s at
-  50% -> motor_node's open-loop `max_linear_speed_mps` 2.0 -> 3.5 (2.0 had
-  the robot ~1.7x faster than commanded, speed caps included); effective
-  wheel radius 0.0615 (encoders read ~2.6% short vs tape; URDF keeps the
-  nominal 0.06). Consequence of the floor: ~1 m/s is the slowest straight
-  speed (0.30 x 3.5); slower commands get floored. Tracking is good: <1 deg
+  28% (`min_duty_cycle` 0.25 -> 0.30); settled cruise 1.91 m/s at 50% on a
+  5 m run -> motor_node's open-loop `max_linear_speed_mps` 2.0 -> 3.8 (2.0
+  had the robot ~1.9x faster than commanded, speed caps included);
+  effective wheel radius 0.062 (tape-calibrated; URDF keeps the nominal
+  0.06). Braking (G2 PWM low = outputs shorted) stops in ~0.12 s x speed
+  (0.22 m from 1.9 m/s). Consequence of the floor: ~1.1 m/s is the slowest
+  straight speed (0.30 x 3.8); slower commands get floored. Tracking is good: <1 deg
   heading change and <2 cm drift over 3 m, left/right duty within 2%.
 - Nav2 params: `robot_radius` now matches `bot.urdf.xacro`'s real footprint
   and the map-then-race launch wiring (mapping.launch.py / bringup.launch.py)

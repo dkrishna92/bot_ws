@@ -31,7 +31,7 @@ MAX_DUTY = 75.0  # same as motor_node's max_duty_cycle: ~12 V (motor rating) fro
 
 # Same as wheel_odom_node's defaults.
 TICKS_PER_REV = 979.62
-WHEEL_RADIUS_M = 0.0615  # tape-calibrated 2026-09-30 (nominal 0.06)
+WHEEL_RADIUS_M = 0.062  # tape-calibrated 2026-09-30 (nominal 0.06)
 TRACK_WIDTH_M = 0.33  # measured 2026-09-30
 M_PER_TICK = 2 * math.pi * WHEEL_RADIUS_M / TICKS_PER_REV
 
@@ -70,6 +70,7 @@ class Encoders(threading.Thread):
         self._lock = threading.Lock()
         self._left = self._right = None
         self._stamp = 0.0
+        self._us = 0  # Teensy micros of the latest counts
         self.error = None
         # Diagnostics: fastest tick rate seen per side (from the Teensy's own
         # micros timestamps), and its once-a-second S status lines
@@ -94,7 +95,7 @@ class Encoders(threading.Thread):
                             for i, (now, before) in enumerate(((left, self._prev[0]), (right, self._prev[1]))):
                                 self.max_rate[i] = max(self.max_rate[i], abs(now - before) / dt)
                         self._prev = (left, right, us)
-                        self._left, self._right, self._stamp = left, right, time.monotonic()
+                        self._left, self._right, self._stamp, self._us = left, right, time.monotonic(), us
                 elif parts[0] == "S":
                     with self._lock:
                         self.status_lines.append((time.monotonic(), line))
@@ -133,13 +134,18 @@ class Encoders(threading.Thread):
 
     def read(self):
         """(left, right) ticks; raises RuntimeError if the data is stale or failed."""
+        return self.read_stamped()[:2]
+
+    def read_stamped(self):
+        """(left, right, teensy_us): the Teensy's own sample time, for speeds
+        (USB delivers the lines in bursts, so host read times are jittery)."""
         with self._lock:
-            left, right, stamp = self._left, self._right, self._stamp
+            left, right, stamp, us = self._left, self._right, self._stamp, self._us
         if self.error:
             raise RuntimeError(self.error)
         if time.monotonic() - stamp > self.STALE_S:
             raise RuntimeError("encoder data stopped arriving")
-        return left, right
+        return left, right, us
 
 
 class Imu:

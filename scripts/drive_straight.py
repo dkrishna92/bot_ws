@@ -39,9 +39,11 @@ RAMP_RATE = 15.0  # % duty per second while looking for breakaway
 MAX_BREAKAWAY_WAIT_S = 1.0
 RAMP_DOWN_M = 0.15  # slow down over at least this, or 0.5 s at cruise speed if longer
 BRAKE_S = 0.5  # hold PWM low with the driver awake (G2 brake mode) before it sleeps
-# Braking deceleration for the stop-early prediction: a 2026-09-30 run
-# braked 0.15 m from ~1.2 m/s (~4.7 m/s^2). A little low = stops a touch short.
-BRAKE_DECEL = 4.0
+# Braking distance for the stop-early prediction. G2 brake (outputs
+# shorted) gives a force ~ speed, so the distance is ~ speed x a time
+# constant: 2026-09-30 runs braked 0.22 m from 1.91 m/s and ~0.15 m from
+# ~1.3 m/s -> ~0.12 s.
+BRAKE_TAU_S = 0.12
 STALL_WINDOW_S = 0.5
 STALL_MIN_TICKS = 20  # a wheel moving fewer ticks than this per window after breakaway = stalled
 SETTLE_S = 0.7
@@ -74,7 +76,7 @@ def main():
     prev_l, prev_r = l0, r0
     imu.start()
     x = y = 0.0
-    history = []  # (t, left progress, right progress)
+    history = []  # (t, left progress, right progress, teensy_us)
     breakaway = None
     duty = args.start_duty
     at_max_since = None
@@ -91,7 +93,7 @@ def main():
             while True:
                 loop_start = time.monotonic()
                 t = loop_start - start
-                left, right = enc.read()
+                left, right, us = enc.read_stamped()
                 yaw = imu.yaw_deg()
 
                 pl, pr = sign * (left - l0), sign * (right - r0)
@@ -102,7 +104,7 @@ def main():
                 y += ds * math.sin(math.radians(yaw))
 
                 # Cut power early by the braking distance, so it stops AT the target
-                if dist + speed * speed / (2 * BRAKE_DECEL) >= args.distance:
+                if dist + speed * BRAKE_TAU_S >= args.distance:
                     break
                 if t > args.timeout:
                     reason = f"ABORTED: timeout after {args.timeout:.0f} s at {dist:.2f} m"
@@ -112,7 +114,7 @@ def main():
                     reason = f"ABORTED: motor driver fault on {', '.join(faults)} (over-current?)"
                     break
 
-                history.append((t, pl, pr))
+                history.append((t, pl, pr, us))
                 while history and history[0][0] < t - STALL_WINDOW_S:
                     history.pop(0)
                 span = t - history[0][0]
@@ -140,10 +142,11 @@ def main():
                         break
                     duty = max(breakaway, args.duty)
                     remaining = args.distance - dist
-                    # Speed over the last ~0.2 s (the 0.5 s stall window lags when slowing)
-                    ref = next((h for h in reversed(history) if t - h[0] >= 0.2), None)
+                    # Speed over the last ~0.2 s of Teensy time (the 0.5 s stall
+                    # window lags when slowing; host read times are bursty)
+                    ref = next((h for h in reversed(history) if us - h[3] >= 200_000), None)
                     if ref is not None:
-                        speed = ((pl - ref[1]) + (pr - ref[2])) / 2 * dl.M_PER_TICK / (t - ref[0])
+                        speed = ((pl - ref[1]) + (pr - ref[2])) / 2 * dl.M_PER_TICK / ((us - ref[3]) / 1e6)
                     ramp_m = max(RAMP_DOWN_M, 0.5 * speed)
                     if remaining < ramp_m:
                         duty = breakaway + (duty - breakaway) * remaining / ramp_m
@@ -188,7 +191,8 @@ def main():
         print(f"  average         {(d_l + d_r) / 2:6.3f} m   (target {args.distance:.3f} m)")
         braked = (d_l + d_r) / 2 - dist_at_stop
         print(f"  at motor stop   {dist_at_stop:6.3f} m at {speed_at_stop:.2f} m/s -> {braked:.3f} m while braking"
-              + (f" ({speed_at_stop ** 2 / (2 * braked):.1f} m/s^2)" if braked > 0.01 and speed_at_stop > 0.2 else ""))
+              + (f" ({braked / speed_at_stop:.2f} s x speed; BRAKE_TAU_S {BRAKE_TAU_S})"
+                 if braked > 0.01 and speed_at_stop > 0.2 else ""))
     except RuntimeError as e:
         print(f"  (no final encoder reading: {e})")
     print(f"  heading change  {yaw:+6.1f} deg (IMU, + = turned left)")

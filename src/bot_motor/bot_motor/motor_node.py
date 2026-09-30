@@ -74,10 +74,10 @@ class MotorNode(Node):
         self.declare_parameter("cmd_vel_timeout_s", 0.3)
         self.declare_parameter("track_width_m", 0.33)  # measured 2026-09-30 (was 0.32)
         # Wheel speed at 100% duty (open loop: duty = v / this). Measured
-        # 2026-09-30 with drive_straight.py (tape-corrected cruise speeds):
-        # 1.31 m/s at 35%, 1.66 m/s at 50% -> least-squares 3.5 on a full
-        # pack. Was 2.0, which drove everything ~1.7x faster than commanded.
-        self.declare_parameter("max_linear_speed_mps", 3.5)
+        # 2026-09-30 with drive_straight.py: settled 1.91 m/s at 50% on a
+        # 5 m run (tape-checked) -> 3.8 on a full pack. Was 2.0, which drove
+        # everything ~1.9x faster than commanded.
+        self.declare_parameter("max_linear_speed_mps", 3.8)
         # Pin map fixed by the Pololu Dual G2 for Raspberry Pi board (BCM GPIO
         # numbers): motor 1 = channel A = left, motor 2 = channel B = right.
         # FLT is the driver's open-drain fault output (low = fault), read here

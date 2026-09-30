@@ -73,10 +73,10 @@ class WheelOdomNode(Node):
         self.declare_parameter("serial_port", "/dev/ttyACM0")
         self.declare_parameter("baud", 115200)
         self.declare_parameter("ticks_per_rev", 979.62)
-        # Effective rolling radius: two ~3 m runs read 3.14 / 3.20 m on the
-        # encoders and ~3.25 m by tape (2026-09-30), so 0.06 x ~1.026. The
+        # Effective rolling radius, tape-calibrated 2026-09-30 (runs of 3.25
+        # and 4.8 m by tape read 0.8% short at 0.0615, 3.5% at 0.06). The
         # URDF keeps the nominal 0.06.
-        self.declare_parameter("wheel_radius_m", 0.0615)
+        self.declare_parameter("wheel_radius_m", 0.062)
         self.declare_parameter("track_width_m", 0.33)  # measured 2026-09-30 (was 0.32)
 
         self._ticks_per_rev = self.get_parameter("ticks_per_rev").value
