@@ -104,8 +104,8 @@ from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from nav_msgs.msg import OccupancyGrid
-from std_msgs.msg import Bool, String
-from slam_toolbox.srv import SaveMap, SerializePoseGraph
+from std_msgs.msg import Bool
+from slam_toolbox.srv import SerializePoseGraph
 
 TELEOP_STALE_S = 0.5  # zero cmd_vel if the browser stops sending for this long
 SAVE_MAP_TIMEOUT_S = 10.0
@@ -144,6 +144,29 @@ WATCH_EXPIRY_S = 10.0
 
 def _png_chunk(tag: bytes, data: bytes) -> bytes:
     return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+
+def write_map_files(grid: OccupancyGrid, target: str) -> None:
+    """<target>.pgm + <target>.yaml exactly as nav2's map_saver writes them
+    (trinary: occupied >= 65 -> 0, free <= 25 -> 254, else 205 unknown), for
+    map_server/AMCL in bringup. The yaml goes last, so a map only shows up
+    in the race list once its image is complete."""
+    w, h = grid.info.width, grid.info.height
+    arr = np.asarray(grid.data, dtype=np.int16).reshape(h, w)
+    img = np.full((h, w), 205, dtype=np.uint8)
+    img[(arr >= 0) & (arr <= 25)] = 254
+    img[arr >= 65] = 0
+    with open(target + ".pgm", "wb") as f:
+        f.write(f"P5\n# CREATOR: web_control_node {grid.info.resolution:.3f} m/pix\n{w} {h}\n255\n".encode())
+        f.write(np.flipud(img).tobytes())  # image row 0 = the grid's max-y row
+    o = grid.info.origin
+    yaw = math.atan2(2.0 * (o.orientation.w * o.orientation.z + o.orientation.x * o.orientation.y),
+                     1.0 - 2.0 * (o.orientation.y ** 2 + o.orientation.z ** 2))
+    with open(target + ".yaml", "w") as f:
+        f.write(f"image: {os.path.basename(target)}.pgm\nmode: trinary\n"
+                f"resolution: {grid.info.resolution:.3f}\n"
+                f"origin: [{o.position.x:.3f}, {o.position.y:.3f}, {yaw:.3f}]\n"
+                "negate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.196\n")
 
 
 def encode_grayscale_png(width: int, height: int, pixels: bytes) -> bytes:
@@ -224,7 +247,6 @@ class WebControlNode(Node):
         self._proc_label: str | None = None  # "bringup" | "mapping"
 
         self._cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)
-        self._save_map_client = self.create_client(SaveMap, "/slam_toolbox/save_map")
         self._serialize_client = self.create_client(SerializePoseGraph, "/slam_toolbox/serialize_map")
         # Match map_server/slam_toolbox's latched /map publisher so the
         # dashboard still gets the current map when it connects after the
@@ -775,6 +797,20 @@ class WebControlNode(Node):
         """Workspace-relative path -> absolute (when workspace_root is set)."""
         return os.path.join(self._workspace_root, path) if self._workspace_root else path
 
+    def _abs_path(self, path: str) -> str:
+        """Absolute path for anything handed to slam_toolbox. It resolves a
+        relative path against ITS working directory (wherever the dashboard
+        was started from): started outside ~/bot_ws, every save failed
+        silently and resume found no file (2026-09-30)."""
+        return os.path.abspath(self._ws_path(path))
+
+    @staticmethod
+    def _written_since(path: str, since: float) -> bool:
+        try:
+            return os.path.getmtime(path) >= since - 2.0
+        except OSError:
+            return False
+
     def checkpoint_pose(self, name: str | None) -> dict | None:
         """The robot's map pose recorded when checkpoint `name` (default
         checkpoint if empty) was saved, or None if there's no record."""
@@ -802,11 +838,16 @@ class WebControlNode(Node):
         path, err = self._resolve_map_name(name, self._checkpoint_path)
         if err:
             return False, err
+        target = self._abs_path(path)
         request = SerializePoseGraph.Request()
-        request.filename = path
+        request.filename = target
+        started = time.time()
         ok, err = self._call_and_wait(self._serialize_client, request, "slam_toolbox serialize_map")
         if not ok:
             return False, err
+        # slam_toolbox answers even when it couldn't write -- check the file.
+        if not self._written_since(target + ".posegraph", started):
+            return False, f"slam_toolbox did not write {target}.posegraph -- checkpoint NOT saved"
         # Record where the robot is in this map right now: resuming needs
         # the robot's pose in the checkpoint's map frame (map_start_pose),
         # which isn't readable back out of the serialized pose graph. Leave
@@ -819,7 +860,7 @@ class WebControlNode(Node):
             return True, (f"saved checkpoint '{path}' -- but no current slam pose to record, "
                           "so enter the resume pose by hand")
         try:
-            with open(self._ws_path(path) + ".pose.json", "w") as f:
+            with open(target + ".pose.json", "w") as f:
                 json.dump({k: round(pose[k], 3) for k in ("x", "y", "yaw")}, f)
         except OSError as exc:
             return True, f"saved checkpoint '{path}' -- but couldn't record the pose ({exc})"
@@ -827,7 +868,7 @@ class WebControlNode(Node):
                       f"yaw={pose['yaw']:.2f} -- Resume will start from there")
 
     def save_final_map(self, name: str | None):
-        """Export the current map via slam_toolbox's save_map service --
+        """Export the current map (the latest /map, as shown on the page) as
         the flattened .pgm/.yaml pair bringup.launch.py's amcl/map_server
         actually load for racing. Not resumable by a later mapping run --
         use save_checkpoint for that instead. name is an optional bare
@@ -838,12 +879,22 @@ class WebControlNode(Node):
         path, err = self._resolve_map_name(name, self._map_save_path)
         if err:
             return False, err
-        request = SaveMap.Request()
-        request.name = String(data=path)
-        ok, err = self._call_and_wait(self._save_map_client, request, "slam_toolbox save_map")
-        if not ok:
-            return False, err
-        return True, f"saved final map as '{path}' (ready for bringup.launch.py)"
+        # Written from the /map this dashboard already has (what the page
+        # shows), not slam_toolbox's save_map: that runs nav2's map_saver,
+        # which gives up if no /map arrives within 2 s -- it failed that way
+        # on a loaded machine (2026-09-30).
+        with self._lock:
+            grid = self._latest_map
+        if grid is None or grid.info.width == 0 or grid.info.height == 0:
+            return False, "no map received yet -- is a mapping run going, with the map showing? Map NOT saved"
+        target = self._abs_path(path)
+        try:
+            write_map_files(grid, target)
+        except OSError as exc:
+            return False, f"couldn't write {target}.pgm/.yaml ({exc}) -- map NOT saved"
+        return True, (f"saved final map as '{os.path.basename(target)}' "
+                      f"({grid.info.width * grid.info.resolution:.0f} x {grid.info.height * grid.info.resolution:.0f} m) "
+                      "-- ready for Plan A")
 
     # ---- race route ----------------------------------------------------
 
@@ -1033,12 +1084,17 @@ class WebControlNode(Node):
                 if not pose:
                     saved = self.checkpoint_pose(checkpoint_name)
                     pose = f"{saved['x']},{saved['y']},{saved['yaw']}" if saved else "0.0,0.0,0.0"
-                cmd.append(f"resume_map:={ckpt}")
+                cmd.append(f"resume_map:={self._abs_path(ckpt)}")
                 cmd.append(f"resume_pose:={pose}")
+        # Clean slate first: leftovers of an earlier run (e.g. from a dashboard
+        # restarted mid-run) would otherwise keep publishing their old map.
+        self._run_clean_script()
         try:
             # New session/process group so Stop can kill every descendant
             # `ros2 launch` spawns, not just the immediate `ros2` process.
-            proc = subprocess.Popen(cmd, preexec_fn=os.setsid)
+            # cwd = workspace, so anything relative resolves the same way
+            # however the dashboard was started.
+            proc = subprocess.Popen(cmd, preexec_fn=os.setsid, cwd=self._workspace_root or None)
         except OSError as exc:
             return False, f"failed to launch: {exc}"
         with self._lock:
@@ -1152,6 +1208,20 @@ class WebControlNode(Node):
         if recording and not launch_alive:
             threading.Thread(target=self.stop_recording, daemon=True).start()
 
+    def _run_clean_script(self) -> None:
+        """Best-effort thorough sweep -- catches anything a process-group
+        kill missed, and orphans a previous dashboard left behind. On the
+        robot, clean_robot.sh also frees the sensors and drives the motor
+        pins low. --keep-dashboard stops the scripts from matching (and
+        killing) this dashboard itself."""
+        if not self._workspace_root:
+            return
+        script_name = "clean_sim.sh" if self._use_sim else "clean_robot.sh"
+        script = os.path.join(self._workspace_root, "scripts", script_name)
+        if os.path.isfile(script):
+            subprocess.run([script, "--keep-dashboard"], cwd=self._workspace_root,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     def stop_launch(self):
         # The recorder first, so the cleanup sweep below can't cut it off
         # mid-write.
@@ -1173,16 +1243,7 @@ class WebControlNode(Node):
             except ProcessLookupError:
                 pass
             stopped_any = True
-        # Best-effort thorough sweep -- catches anything the process-group
-        # kill above missed. On the robot, clean_robot.sh also frees the
-        # sensors and drives the motor pins low. --keep-dashboard stops the
-        # scripts from matching (and killing) this dashboard itself.
-        if self._workspace_root:
-            script_name = "clean_sim.sh" if self._use_sim else "clean_robot.sh"
-            script = os.path.join(self._workspace_root, "scripts", script_name)
-            if os.path.isfile(script):
-                subprocess.run([script, "--keep-dashboard"], cwd=self._workspace_root,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self._run_clean_script()
         # Zero cmd_vel immediately rather than waiting for the watchdog tick.
         self._cmd_pub.publish(Twist())
         with self._lock:

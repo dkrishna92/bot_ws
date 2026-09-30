@@ -11,6 +11,8 @@ from __future__ import annotations
 import threading
 import zlib
 
+import os
+
 import pytest
 
 from nav_msgs.msg import OccupancyGrid
@@ -238,7 +240,9 @@ def test_start_launch_mapping_with_resume_forwards_checkpoint_and_pose(monkeypat
     ok, _ = node.start_launch("mapping", resume=True, resume_pose="1.2,3.4,0.5")
 
     assert ok is True
-    assert "resume_map:=src/bot_bringup/config/maps/checkpoint" in captured["cmd"]
+    # absolute: slam_toolbox resolves relative paths against its own cwd
+    resume = [a for a in captured["cmd"] if a.startswith("resume_map:=")][0]
+    assert os.path.isabs(resume.split(":=", 1)[1]) and resume.endswith("src/bot_bringup/config/maps/checkpoint")
     assert "resume_pose:=1.2,3.4,0.5" in captured["cmd"]
 
 
@@ -291,24 +295,19 @@ class _FakeFuture:
         cb(self)  # synchronous completion for the test
 
 
-class _FakeSaveMapClient:
-    """Fake for slam_toolbox's save_map service (std_msgs/String-wrapped name)."""
-    def __init__(self, available=True):
-        self._available = available
-        self.last_request = None
-
-    def wait_for_service(self, timeout_sec=0.0):
-        return self._available
-
-    def call_async(self, request):
-        self.last_request = request
-        return _FakeFuture()
+def _ws_node(tmp_path):
+    """A node whose workspace is tmp_path (saves are absolute paths under it)."""
+    node = _make_node()
+    node._workspace_root = str(tmp_path)
+    (tmp_path / "src" / "bot_bringup" / "config" / "maps").mkdir(parents=True, exist_ok=True)
+    return node
 
 
 class _FakeSerializeClient:
     """Fake for slam_toolbox's serialize_map service (plain string filename)."""
-    def __init__(self, available=True):
+    def __init__(self, available=True, writes=True):
         self._available = available
+        self._writes = writes
         self.last_request = None
 
     def wait_for_service(self, timeout_sec=0.0):
@@ -316,6 +315,8 @@ class _FakeSerializeClient:
 
     def call_async(self, request):
         self.last_request = request
+        if self._writes:
+            open(request.filename + ".posegraph", "w").close()
         return _FakeFuture()
 
 
@@ -324,8 +325,8 @@ class _FakeSerializeClient:
 # serialize_map's .posegraph/.data output is something slam_toolbox's
 # map_file_name startup parameter can actually resume from.
 
-def test_save_checkpoint_uses_checkpoint_path_by_default():
-    node = _make_node()
+def test_save_checkpoint_uses_checkpoint_path_by_default(tmp_path):
+    node = _ws_node(tmp_path)
     node._checkpoint_path = "src/bot_bringup/config/maps/checkpoint"
     node._serialize_client = _FakeSerializeClient()
     node._current_map_pose = lambda timeout=2.0: None  # no TF in a unit test
@@ -333,19 +334,19 @@ def test_save_checkpoint_uses_checkpoint_path_by_default():
     ok, msg = node.save_checkpoint(None)
 
     assert ok is True
-    assert node._serialize_client.last_request.filename == "src/bot_bringup/config/maps/checkpoint"
+    assert node._serialize_client.last_request.filename == f"{tmp_path}/src/bot_bringup/config/maps/checkpoint"
     assert "checkpoint" in msg
 
 
-def test_save_checkpoint_resolves_bare_name_under_maps_dir():
-    node = _make_node()
+def test_save_checkpoint_resolves_bare_name_under_maps_dir(tmp_path):
+    node = _ws_node(tmp_path)
     node._serialize_client = _FakeSerializeClient()
     node._current_map_pose = lambda timeout=2.0: None  # no TF in a unit test
 
     ok, msg = node.save_checkpoint("my_custom_checkpoint")
 
     assert ok is True
-    assert node._serialize_client.last_request.filename == "src/bot_bringup/config/maps/my_custom_checkpoint"
+    assert node._serialize_client.last_request.filename == f"{tmp_path}/src/bot_bringup/config/maps/my_custom_checkpoint"
     assert "my_custom_checkpoint" in msg
 
 
@@ -370,62 +371,55 @@ def test_save_checkpoint_rejects_name_with_slash():
     assert node._serialize_client.last_request is None
 
 
-# save_final_map must use save_map (not serialize_map) -- its .pgm/.yaml
-# output is what bringup.launch.py's amcl/map_server actually load.
+# save_final_map writes the .pgm/.yaml bringup's map_server loads, straight
+# from the dashboard's latest /map (not slam_toolbox's save_map, whose
+# map_saver gives up after 2 s without a fresh /map).
 
-def test_save_final_map_uses_map_save_path_by_default():
-    node = _make_node()
-    node._map_save_path = "src/bot_bringup/config/maps/map"
-    node._save_map_client = _FakeSaveMapClient()
-
-    ok, msg = node.save_final_map(None)
-
-    assert ok is True
-    assert node._save_map_client.last_request.name.data == "src/bot_bringup/config/maps/map"
-    assert "final map" in msg
-
-
-def test_save_final_map_resolves_bare_name_under_maps_dir():
-    node = _make_node()
-    node._save_map_client = _FakeSaveMapClient()
-
-    ok, msg = node.save_final_map("my_custom_map")
-
-    assert ok is True
-    assert node._save_map_client.last_request.name.data == "src/bot_bringup/config/maps/my_custom_map"
-    assert "my_custom_map" in msg
+def _grid_node(tmp_path):
+    node = _ws_node(tmp_path)
+    grid = _make_grid([-1, 0, 100, 50, 10, 70], width=3, height=2)  # row 0 = min y
+    grid.info.resolution = 0.05
+    grid.info.origin.position.x, grid.info.origin.position.y = -1.5, 2.0
+    grid.info.origin.orientation.w = 1.0
+    node._latest_map = grid
+    return node
 
 
-def test_save_final_map_rejects_name_with_slash():
-    node = _make_node()
-    node._save_map_client = _FakeSaveMapClient()
+def test_save_final_map_writes_map_saver_style_pgm_and_yaml(tmp_path):
+    import yaml
+    node = _grid_node(tmp_path)
+    ok, msg = node.save_final_map("speed")
+    assert ok is True and "speed" in msg
+    base = tmp_path / "src/bot_bringup/config/maps/speed"
+    meta = yaml.safe_load((base.parent / "speed.yaml").read_text())
+    assert meta == {"image": "speed.pgm", "mode": "trinary", "resolution": 0.05,
+                    "origin": [-1.5, 2.0, 0.0], "negate": 0,
+                    "occupied_thresh": 0.65, "free_thresh": 0.196}
+    raw = (base.parent / "speed.pgm").read_bytes()
+    assert raw.startswith(b"P5\n") and b"\n3 2\n255\n" in raw
+    pixels = raw[-6:]
+    # image row 0 = grid row 1 (max y): 50 unknown-ish -> 205, 10 free -> 254, 70 occupied -> 0
+    assert list(pixels) == [205, 254, 0, 205, 254, 0]
+    assert node.list_maps() == ["speed"]  # shows up in the race list at once
 
+
+def test_save_final_map_default_name_and_blank_name(tmp_path):
+    node = _grid_node(tmp_path)
+    assert node.save_final_map(None)[0] is True
+    assert node.save_final_map("   ")[0] is True
+    assert (tmp_path / "src/bot_bringup/config/maps/map.yaml").exists()
+
+
+def test_save_final_map_rejects_name_with_slash(tmp_path):
+    node = _grid_node(tmp_path)
     ok, msg = node.save_final_map("sub/dir")
-
-    assert ok is False
-    assert "invalid map name" in msg
-    assert node._save_map_client.last_request is None
+    assert ok is False and "invalid map name" in msg
 
 
-def test_save_final_map_treats_blank_name_as_default():
-    node = _make_node()
-    node._map_save_path = "src/bot_bringup/config/maps/map"
-    node._save_map_client = _FakeSaveMapClient()
-
-    ok, _ = node.save_final_map("   ")
-
-    assert ok is True
-    assert node._save_map_client.last_request.name.data == "src/bot_bringup/config/maps/map"
-
-
-def test_save_final_map_reports_failure_when_service_unavailable():
-    node = _make_node()
-    node._save_map_client = _FakeSaveMapClient(available=False)
-
-    ok, msg = node.save_final_map(None)
-
-    assert ok is False
-    assert "not available" in msg
+def test_save_final_map_without_a_map_says_not_saved(tmp_path):
+    node = _ws_node(tmp_path)
+    ok, msg = node.save_final_map("speed")
+    assert ok is False and "NOT saved" in msg
 
 
 def _make_maps(tmp_path, maps):
@@ -536,7 +530,10 @@ def _checkpoint_node(tmp_path):
     node._workspace_root = str(tmp_path)
     (tmp_path / "src" / "bot_bringup" / "config" / "maps").mkdir(parents=True)
     node._serialize_client = None  # never called: _call_and_wait is stubbed below
-    node._call_and_wait = lambda client, request, label: (True, None)  # serialize_map "succeeds"
+    def serialize(client, request, label):  # serialize_map "succeeds" and writes its file
+        open(request.filename + ".posegraph", "w").close()
+        return True, None
+    node._call_and_wait = serialize
     return node
 
 
@@ -574,7 +571,7 @@ def test_resume_uses_named_checkpoint_and_its_recorded_pose(tmp_path, monkeypatc
     ok, _ = node.start_launch("mapping", resume=True, checkpoint_name="lap1")
 
     assert ok is True
-    assert "resume_map:=src/bot_bringup/config/maps/lap1" in captured["cmd"]
+    assert f"resume_map:={tmp_path}/src/bot_bringup/config/maps/lap1" in captured["cmd"]
     assert "resume_pose:=1.0,2.0,0.5" in captured["cmd"]
 
 
@@ -982,3 +979,13 @@ def test_new_launch_drops_a_pending_manual_start(monkeypatch):
                         lambda cmd, **kw: _FakePopen(cmd, **kw))
     node.start_launch("mapping")
     assert destroyed == [pubs[0][2]]
+
+
+def test_checkpoint_save_that_writes_no_file_is_a_failure(tmp_path):
+    """slam_toolbox answers serialize_map even when it couldn't write (e.g. a
+    relative path from the wrong cwd) -- that must not read as 'saved'."""
+    node = _ws_node(tmp_path)
+    node._serialize_client = _FakeSerializeClient(writes=False)
+    ok, msg = node.save_checkpoint("speed_1")
+    assert ok is False and "NOT saved" in msg
+    assert node.checkpoint_pose("speed_1") is None

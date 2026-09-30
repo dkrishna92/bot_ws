@@ -83,7 +83,14 @@ echo "Stopping the ROS 2 daemon (stale daemon state can mask a dirty process tab
 ros2 daemon stop >/dev/null 2>&1 || true
 
 echo "Clearing stale Fast DDS shared-memory files (left behind by any process that didn't exit cleanly)..."
-rm -f /dev/shm/fastrtps_* /dev/shm/sem.fastrtps_* 2>/dev/null || true
+# Only files no live process has open: deleting a running process's own
+# segments (e.g. the dashboard's, with --keep-dashboard) leaves it deaf to
+# every node started afterwards -- after each dashboard Stop, the next run's
+# /map never arrived and saves timed out (found 2026-09-30).
+for f in /dev/shm/fastrtps_* /dev/shm/sem.fastrtps_*; do
+    [ -e "$f" ] || continue
+    fuser -s "$f" 2>/dev/null || rm -f "$f"
+done
 
 # A SIGKILL/SIGSEGV crash (gz sim, a nav2 server, etc.) can dump a core file
 # into whatever was the process's cwd -- normally this workspace root, since

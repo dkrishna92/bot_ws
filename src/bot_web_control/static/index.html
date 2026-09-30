@@ -414,7 +414,9 @@ function saveTo(endpoint, fieldId = 'mapName') {
     body: JSON.stringify({ name: name || null, base: document.getElementById('mapName').value.trim() })
   })
     .then(r => r.json())
-    .then(s => { alert(s.message); loadMaps(); });
+    // refresh every list a save can change: race maps, checkpoints (and the
+    // auto-name hint), and the resume pose recorded with the checkpoint
+    .then(s => { alert(s.message); loadMaps(); loadCheckpoints(); loadCheckpointPose(); });
 }
 document.getElementById('btnManualStart').addEventListener('click', () => {
   if (!confirm('Start the race now without the start light (5 s penalty in a real race)? E-stop in hand?')) return;
