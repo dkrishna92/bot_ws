@@ -18,6 +18,7 @@ Usage:
     ros2 launch bot_bringup bringup.launch.py use_sim:=true
 """
 import os
+import tempfile
 
 import yaml
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
@@ -82,6 +83,95 @@ def _resolve_map(context):
     return os.path.join(get_package_share_directory('bot_bringup'), 'config', 'maps', f'{value}.yaml')
 
 
+def _capped_nav2_params(path, max_speed, max_turn, initial_pose=None):
+    """Nav2 params with speeds capped for slow first laps: returns (path to
+    use, what changed). Caps the controller (DWB max_vel_x/max_speed_xy/
+    max_vel_theta, MPPI vx_max/wz_max), the velocity smoother and the spin
+    behaviour -- the smoother alone would clamp output while the controller
+    still planned for full speed. max_speed/max_turn <= 0 leave that axis
+    alone; nothing capped returns the original path."""
+    if max_speed <= 0 and max_turn <= 0 and initial_pose is None:
+        return path, []
+    with open(path) as f:
+        params = yaml.safe_load(f) or {}
+    changed = []
+    if initial_pose is not None:
+        amcl = params.setdefault('amcl', {}).setdefault('ros__parameters', {})
+        x, y, yaw = initial_pose
+        amcl['set_initial_pose'] = True
+        amcl['initial_pose'] = {'x': float(x), 'y': float(y), 'z': 0.0, 'yaw': float(yaw)}
+        changed.append('amcl.initial_pose')
+
+    def cap(d, key, limit):
+        v = d.get(key)
+        if limit > 0 and isinstance(v, (int, float)) and abs(v) > limit:
+            d[key] = limit if v > 0 else -limit
+            changed.append(key)
+
+    ctrl = (params.get('controller_server') or {}).get('ros__parameters') or {}
+    for plugin in ctrl.values():
+        if isinstance(plugin, dict):
+            for key in ('max_vel_x', 'max_speed_xy', 'vx_max'):
+                cap(plugin, key, max_speed)
+            for key in ('max_vel_theta', 'max_speed_theta', 'wz_max'):
+                cap(plugin, key, max_turn)
+    smoother = (params.get('velocity_smoother') or {}).get('ros__parameters') or {}
+    for key in ('max_velocity', 'min_velocity'):
+        vel = smoother.get(key)
+        if isinstance(vel, list) and len(vel) == 3:
+            for i, limit in ((0, max_speed), (2, max_turn)):
+                if limit > 0 and abs(vel[i]) > limit:
+                    vel[i] = limit if vel[i] > 0 else -limit
+                    changed.append(f'velocity_smoother.{key}[{i}]')
+    cap((params.get('behavior_server') or {}).get('ros__parameters') or {}, 'max_rotational_vel', max_turn)
+    fd, out = tempfile.mkstemp(prefix='nav2_capped_', suffix='.yaml')
+    with os.fdopen(fd, 'w') as f:
+        yaml.safe_dump(params, f)
+    return out, changed
+
+
+def _effective_initial_pose(context, map_yaml_path, amcl_params):
+    """Where AMCL starts: (x, y, yaw, source, override) or None.
+
+    1. initial_pose:=x,y,yaw launch argument
+    2. <map>.start.yaml next to the map ({x, y, yaw}; the dashboard's "Set
+       race start pose here" writes it) -- the start pose belongs to the
+       map, since every map has its own frame
+    3. nav2_params.yaml's amcl.initial_pose (one hardcoded pose for every
+       map -- the sim rehearsal 2026-10-01 had AMCL start 20 m / 180 deg
+       away from the robot this way, with every node reporting healthy)
+    override is True for 1 and 2 (the params file needs rewriting)."""
+    arg = LaunchConfiguration('initial_pose').perform(context).strip()
+    if arg:
+        x, y, yaw = (float(v) for v in arg.split(','))
+        return x, y, yaw, 'initial_pose argument', True
+    start_file = map_yaml_path[:-len('.yaml')] + '.start.yaml' if map_yaml_path.endswith('.yaml') else ''
+    if start_file and os.path.isfile(start_file):
+        with open(start_file) as f:
+            data = yaml.safe_load(f) or {}
+        return float(data['x']), float(data['y']), float(data.get('yaw', 0.0)), start_file, True
+    if amcl_params.get('set_initial_pose'):
+        pose = amcl_params.get('initial_pose') or {}
+        if pose.get('x') is None or pose.get('y') is None:
+            raise ValueError("amcl.set_initial_pose is true but initial_pose.x/y is missing")
+        return float(pose['x']), float(pose['y']), float(pose.get('yaw', 0.0)), 'nav2 params file (hardcoded)', False
+    return None
+
+
+def _resolve_route(context, map_yaml_path):
+    """lap_navigator's route file: the 'route' argument (a name in
+    config/maps -> <name>.route.yaml, or a path), else the map's own
+    <map>.route.yaml next to it if one was recorded, else '' (lap_navigator
+    then falls back to its built-in, sim-derived checkpoints)."""
+    value = LaunchConfiguration('route').perform(context).strip()
+    if value:
+        if value.endswith('.yaml') or os.sep in value:
+            return os.path.abspath(os.path.expanduser(value))
+        return os.path.join(get_package_share_directory('bot_bringup'), 'config', 'maps', f'{value}.route.yaml')
+    paired = map_yaml_path[:-len('.yaml')] + '.route.yaml' if map_yaml_path.endswith('.yaml') else ''
+    return paired if paired and os.path.isfile(paired) else ''
+
+
 def _validate_map(context, *args, **kwargs):
     """Fail fast, with a clear message, instead of letting a bad map surface
     as a cryptic Nav2 failure many steps downstream (amcl silently never
@@ -143,19 +233,17 @@ def _validate_map(context, *args, **kwargs):
         nav2_params = yaml.safe_load(f)
     amcl_params = (nav2_params.get('amcl') or {}).get('ros__parameters') or {}
 
-    if amcl_params.get('set_initial_pose'):
-        pose = amcl_params.get('initial_pose') or {}
-        px, py = pose.get('x'), pose.get('y')
-        if px is None or py is None:
-            return [LogInfo(msg=(
-                f"FATAL: {nav2_params_path}'s amcl.set_initial_pose is true "
-                "but initial_pose.x/y is missing"
-            )), Shutdown(reason='initial_pose incomplete')]
+    try:
+        start = _effective_initial_pose(context, map_yaml_path, amcl_params)
+    except (ValueError, KeyError, TypeError, OSError, yaml.YAMLError) as exc:
+        return [LogInfo(msg=f"FATAL: bad initial pose: {exc!r}"), Shutdown(reason='initial pose unreadable')]
+    if start is not None:
+        px, py, pyaw, pose_source, pose_override = start
         if not (map_min_x + margin <= px <= map_max_x - margin
                 and map_min_y + margin <= py <= map_max_y - margin):
             return [LogInfo(msg=(
                 f"FATAL: amcl's initial_pose ({px}, {py}) from "
-                f"{nav2_params_path} falls outside {map_yaml_path}'s bounds "
+                f"{pose_source} falls outside {map_yaml_path}'s bounds "
                 f"(x: [{map_min_x:.3f}, {map_max_x:.3f}], "
                 f"y: [{map_min_y:.3f}, {map_max_y:.3f}]) with the required "
                 f"{margin}m margin. This map was very likely saved from an "
@@ -168,10 +256,49 @@ def _validate_map(context, *args, **kwargs):
                 "if this margin is being overly strict for a known-good map."
             )), Shutdown(reason='initial_pose outside map bounds')]
 
-    return [set_map, LogInfo(msg=(
+    actions = [set_map, LogInfo(msg=(
         f"Map bounds check OK: {map_yaml_path} covers amcl's initial_pose "
         f"with >= {margin}m margin (or set_initial_pose is false)."
     ))]
+    if start is not None:
+        actions.append(LogInfo(msg=(
+            f"AMCL starts at x={px:.2f} y={py:.2f} yaw={pyaw:.2f} from {pose_source}"
+            + ("" if pose_override else " -- NOT specific to this map: record one (dashboard 'Set race start "
+                                        "pose here' -> <map>.start.yaml) or pass initial_pose:=x,y,yaw"))))
+
+    # Speed caps for slow first laps (max_speed/max_turn launch args), plus
+    # the map's own start pose when it didn't come from the params file
+    params_path, changed = _capped_nav2_params(
+        nav2_params_path,
+        float(LaunchConfiguration('max_speed').perform(context) or 0),
+        float(LaunchConfiguration('max_turn').perform(context) or 0),
+        initial_pose=(px, py, pyaw) if start is not None and pose_override else None)
+    actions.append(SetLaunchConfiguration('nav2_params_resolved', params_path))
+    if changed:
+        actions.append(LogInfo(msg=f"Nav2 params adjusted ({', '.join(changed)}) via {params_path}"))
+
+    # Multi-lap course navigator (bot_navigation) -- subscribes to
+    # start_trigger_node's start_signal and sends Nav2 the route once it
+    # fires. Started here, after the map is resolved, because its route is
+    # tied to the map (<map>.route.yaml, recorded on that map).
+    route_file = _resolve_route(context, map_yaml_path)
+    actions.append(LogInfo(msg=(
+        f"Race route: {route_file}" if route_file else
+        "No route file for this map -- lap_navigator falls back to its BUILT-IN sim checkpoints, "
+        "which are NOT valid on the real course (record one: dashboard 'Add checkpoint here').")))
+    actions.append(Node(
+        package='bot_navigation',
+        executable='lap_navigator_node',
+        name='lap_navigator_node',
+        output='screen',
+        parameters=[{
+            'course': LaunchConfiguration('course'),
+            'num_laps': LaunchConfiguration('num_laps'),
+            'route_file': route_file,
+            'use_sim_time': LaunchConfiguration('use_sim'),
+        }],
+    ))
+    return actions
 
 
 def generate_launch_description():
@@ -198,6 +325,28 @@ def generate_launch_description():
             'use_sim',
             default_value='false',
             description='Launch with Gazebo simulation',
+        ),
+        DeclareLaunchArgument(
+            'route',
+            default_value='',
+            description="lap_navigator's route: a name in config/maps (<name>.route.yaml) or a path. "
+                        "Default: the map's own <map>.route.yaml if one was recorded",
+        ),
+        DeclareLaunchArgument(
+            'initial_pose',
+            default_value='',
+            description="AMCL's start pose 'x,y,yaw' in the map. Default: the map's own <map>.start.yaml, "
+                        "else nav2 params' amcl.initial_pose",
+        ),
+        DeclareLaunchArgument(
+            'max_speed',
+            default_value='0.0',
+            description='Cap Nav2 forward speed (m/s) for slow first laps; 0 = the params file as-is',
+        ),
+        DeclareLaunchArgument(
+            'max_turn',
+            default_value='0.0',
+            description='Cap Nav2 turn rate (rad/s); 0 = the params file as-is',
         ),
         DeclareLaunchArgument(
             'map',
@@ -268,11 +417,11 @@ def generate_launch_description():
             description="Laps to run; 0 uses the course's own default (3 for speed, 2 for obstacle).",
         ),
 
-        # Set use_sim_time parameter when using simulation
-        SetEnvironmentVariable(
-            name='ROS_DOMAIN_ID',
-            value='0'
-        ),
+        # (No ROS_DOMAIN_ID override here -- this used to force domain 0,
+        # which silently cut bringup off from the web dashboard and any
+        # terminal on another domain, and put the robot on the default
+        # domain every other team's ROS 2 robot uses. The domain and
+        # discovery range come from the environment; see RACE_DAY.md.)
 
         # Conditionally include Gazebo -- amcl owns map->odom here, so tell
         # gazebo_sim.launch.py not to also publish it
@@ -328,21 +477,8 @@ def generate_launch_description():
             }],
         ),
 
-        # Multi-lap course navigator (bot_navigation) -- subscribes to
-        # start_trigger_node's start_signal and sends Nav2 the checkpoint
-        # route for 'course' once it fires. Runs in both sim and on real
-        # hardware; no image-topic split needed since it only talks to Nav2.
-        Node(
-            package='bot_navigation',
-            executable='lap_navigator_node',
-            name='lap_navigator_node',
-            output='screen',
-            parameters=[{
-                'course': LaunchConfiguration('course'),
-                'num_laps': LaunchConfiguration('num_laps'),
-                'use_sim_time': LaunchConfiguration('use_sim'),
-            }],
-        ),
+        # lap_navigator_node is started by _validate_map (once the map --
+        # and so its paired route file -- is resolved).
     ]
 
     # Robot localization (EKF odometry fusion) - only if package is installed.
@@ -387,7 +523,7 @@ def generate_launch_description():
                     'slam': 'False',
                     'map': LaunchConfiguration('map_yaml'),  # resolved by _validate_map
                     'use_sim_time': LaunchConfiguration('use_sim'),
-                    'params_file': PathJoinSubstitution([pkg_bringup, 'config', LaunchConfiguration('nav2_params_file')]),
+                    'params_file': LaunchConfiguration('nav2_params_resolved'),  # set by _validate_map
                     'autostart': 'true',
                 }.items(),
             )

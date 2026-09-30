@@ -28,13 +28,16 @@ replace them entirely once real course geometry is available.
 from __future__ import annotations
 
 import math
+import time
 
 import rclpy
+import yaml
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile
 from std_msgs.msg import Bool
 from geometry_msgs.msg import PoseStamped
+from action_msgs.msg import GoalStatus
 from nav2_msgs.action import NavigateThroughPoses
 
 
@@ -103,6 +106,8 @@ _COURSE_CHECKPOINTS = {
     ],
 }
 
+RETRY_DELAY_S = 3.0
+
 _COURSE_LAPS = {
     "speed_course_cfr": 3,
     "obstacle_course_cfr": 2,
@@ -130,29 +135,68 @@ def _route_for_course(course: str, num_laps_override: int) -> list[tuple[float, 
     return _build_route(_COURSE_CHECKPOINTS[course], num_laps)
 
 
+def load_route_file(path: str) -> tuple[list[tuple[float, float]], int]:
+    """A route recorded on the real map (the web dashboard's "Add checkpoint
+    here" writes these): YAML with 'checkpoints' as [[x, y], ...] in the map
+    frame and optionally 'laps'. Returns (checkpoints, laps or 0)."""
+    with open(path) as f:
+        data = yaml.safe_load(f) or {}
+    points = [(float(p[0]), float(p[1])) for p in data.get("checkpoints") or []]
+    return points, int(data.get("laps") or 0)
+
+
 class LapNavigatorNode(Node):
     def __init__(self):
         super().__init__("lap_navigator_node")
 
         self.declare_parameter("course", "speed_course_cfr")
-        self.declare_parameter("num_laps", 0)  # 0 -> use the course's own default lap count
+        self.declare_parameter("num_laps", 0)  # 0 -> the route file's / course's own lap count
         self.declare_parameter("goal_frame_id", "map")
+        # Route recorded on the real map (see load_route_file). Empty -> the
+        # built-in _COURSE_CHECKPOINTS, which are sim/CAD-derived and NOT
+        # valid on the real course.
+        self.declare_parameter("route_file", "")
+        # How many times to resend the not-yet-reached checkpoints after Nav2
+        # aborts the route (blocked lane, planner failure) before giving up.
+        self.declare_parameter("max_retries", 5)
 
         course = self.get_parameter("course").value
         num_laps_override = self.get_parameter("num_laps").value
-        self._route = _route_for_course(course, num_laps_override)
-        if not self._route:
-            self.get_logger().error(
-                f"Unknown course '{course}' -- no checkpoints defined for it "
-                f"(known: {list(_COURSE_CHECKPOINTS)}). Not navigating."
-            )
+        route_file = self.get_parameter("route_file").value
+        self._route = []
+        if route_file:
+            try:
+                points, file_laps = load_route_file(route_file)
+            except (OSError, yaml.YAMLError, TypeError, ValueError, IndexError) as exc:
+                self.get_logger().error(f"Can't read route file {route_file}: {exc} -- not navigating.")
+                points, file_laps = [], 0
+            if len(points) >= 2:
+                laps = num_laps_override or file_laps or _COURSE_LAPS.get(course, 1)
+                self._route = _build_route(points, laps)
+                self.get_logger().info(
+                    f"Loaded route file {route_file}: {len(points)} checkpoints x {laps} laps.")
+            elif points or route_file:
+                self.get_logger().error(f"Route file {route_file} has fewer than 2 checkpoints -- not navigating.")
         else:
-            self.get_logger().info(
-                f"Loaded '{course}' ({len(self._route)} checkpoints total)."
-            )
+            self._route = _route_for_course(course, num_laps_override)
+            if not self._route:
+                self.get_logger().error(
+                    f"Unknown course '{course}' -- no checkpoints defined for it "
+                    f"(known: {list(_COURSE_CHECKPOINTS)}). Not navigating."
+                )
+            else:
+                self.get_logger().warn(
+                    f"Using the BUILT-IN '{course}' checkpoints ({len(self._route)} total) -- these are "
+                    "sim-derived; record a route on the real map and pass route_file."
+                )
 
         self._sent = False
         self._pending = False
+        self._next_index = 0      # first route checkpoint not yet reached
+        self._sent_from = 0       # index the goal in flight started at
+        self._remaining = None    # Nav2 feedback: poses remaining in the goal in flight
+        self._retries_left = self.get_parameter("max_retries").value
+        self._retry_after = 0.0   # monotonic time before which a resend waits
         # Nav2's bt_navigator can still be coming up when the start signal
         # fires. Retry on a timer rather than blocking in the subscription
         # callback -- a blocking wait there stalls this node's executor, so
@@ -181,7 +225,7 @@ class LapNavigatorNode(Node):
         self._try_send()
 
     def _try_send(self) -> None:
-        if not self._pending or self._sent:
+        if not self._pending or self._sent or time.monotonic() < self._retry_after:
             return
         # Short active wait rather than server_is_ready(): the latter is a
         # passive check that can keep reporting "not ready" indefinitely
@@ -201,8 +245,10 @@ class LapNavigatorNode(Node):
         frame_id = self.get_parameter("goal_frame_id").value
         stamp = self.get_clock().now().to_msg()
 
+        self._sent_from = self._next_index
+        self._remaining = None
         goal_msg = NavigateThroughPoses.Goal()
-        for x, y, yaw in self._route:
+        for x, y, yaw in self._route[self._next_index:]:
             pose = PoseStamped()
             pose.header.frame_id = frame_id
             pose.header.stamp = stamp
@@ -212,8 +258,13 @@ class LapNavigatorNode(Node):
             pose.pose.orientation.w = math.cos(yaw / 2.0)
             goal_msg.poses.append(pose)
 
-        self.get_logger().info(f"Sending {len(self._route)}-checkpoint route to Nav2.")
-        self._nav_client.send_goal_async(goal_msg).add_done_callback(self._on_goal_response)
+        self.get_logger().info(
+            f"Sending checkpoints {self._next_index + 1}-{len(self._route)} of {len(self._route)} to Nav2.")
+        self._nav_client.send_goal_async(goal_msg, feedback_callback=self._on_feedback).add_done_callback(
+            self._on_goal_response)
+
+    def _on_feedback(self, msg) -> None:
+        self._remaining = msg.feedback.number_of_poses_remaining
 
     def _on_goal_response(self, future) -> None:
         handle = future.result()
@@ -226,7 +277,31 @@ class LapNavigatorNode(Node):
         handle.get_result_async().add_done_callback(self._on_result)
 
     def _on_result(self, future) -> None:
-        self.get_logger().info("Route finished.")
+        status = future.result().status
+        if status == GoalStatus.STATUS_SUCCEEDED:
+            self.get_logger().info("Route finished -- all checkpoints reached.")
+            return
+        # Resume from the first checkpoint Nav2 hadn't reached yet, rather
+        # than stopping the robot for the rest of the race.
+        sent = len(self._route) - self._sent_from
+        if self._remaining is not None:
+            self._next_index = self._sent_from + max(0, sent - self._remaining)
+        if status == GoalStatus.STATUS_CANCELED:
+            self.get_logger().warn("Route canceled (e.g. by an operator) -- not resending.")
+            return
+        if self._retries_left <= 0 or self._next_index >= len(self._route):
+            self.get_logger().error(
+                f"Route ended with status {status} at checkpoint {self._next_index + 1}/{len(self._route)}"
+                " -- no retries left, stopping.")
+            return
+        self._retries_left -= 1
+        self.get_logger().warn(
+            f"Nav2 ended the route with status {status} -- resending from checkpoint "
+            f"{self._next_index + 1}/{len(self._route)} ({self._retries_left} retries left).")
+        self._sent = False
+        self._pending = True  # _try_send (timer) resends...
+        self._retry_after = time.monotonic() + RETRY_DELAY_S  # ...after a pause, so a briefly
+        # blocked lane (or a planner hiccup) doesn't burn every retry in seconds
 
 
 def main(args=None):

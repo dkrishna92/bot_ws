@@ -104,3 +104,67 @@ def test_waits_for_nav2_then_sends_when_server_comes_up(node):
     assert sent == [True]
     assert node._sent is True
     assert node._pending is False
+
+
+def test_route_file_replaces_builtin_checkpoints(tmp_path):
+    route = tmp_path / "speed.yaml"
+    route.write_text("laps: 2\ncheckpoints:\n  - [0.0, 0.0]\n  - [5.0, 0.0]\n  - [5.0, 3.0]\n")
+    rclpy.init(args=["--ros-args", "-p", f"route_file:={route}"])
+    try:
+        n = LapNavigatorNode()
+        assert len(n._route) == 6  # 3 checkpoints x 2 laps from the file
+        assert n._route[0][:2] == (0.0, 0.0) and n._route[2][:2] == (5.0, 3.0)
+        n.destroy_node()
+    finally:
+        rclpy.shutdown()
+
+
+def test_unreadable_route_file_loads_no_route(tmp_path):
+    rclpy.init(args=["--ros-args", "-p", f"route_file:={tmp_path / 'missing.yaml'}"])
+    try:
+        n = LapNavigatorNode()
+        assert n._route == []
+        n.destroy_node()
+    finally:
+        rclpy.shutdown()
+
+
+class _Result:
+    def __init__(self, status):
+        self.status = status
+
+
+class _Future:
+    def __init__(self, status):
+        self._r = _Result(status)
+
+    def result(self):
+        return self._r
+
+
+def test_abort_resends_from_first_unreached_checkpoint(node):
+    from action_msgs.msg import GoalStatus
+    total = len(node._route)
+    node._sent, node._sent_from, node._remaining = True, 0, total - 2  # reached 2 checkpoints
+
+    node._on_result(_Future(GoalStatus.STATUS_ABORTED))
+
+    assert node._next_index == 2
+    assert node._pending is True and node._sent is False
+    assert node._retries_left == node.get_parameter("max_retries").value - 1
+
+
+def test_success_and_cancel_do_not_resend(node):
+    from action_msgs.msg import GoalStatus
+    for status in (GoalStatus.STATUS_SUCCEEDED, GoalStatus.STATUS_CANCELED):
+        node._sent, node._pending = True, False
+        node._on_result(_Future(status))
+        assert node._pending is False
+
+
+def test_gives_up_when_retries_run_out(node):
+    from action_msgs.msg import GoalStatus
+    node._retries_left = 0
+    node._sent, node._pending, node._remaining = True, False, 1
+    node._on_result(_Future(GoalStatus.STATUS_ABORTED))
+    assert node._pending is False

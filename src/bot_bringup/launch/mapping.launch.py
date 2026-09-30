@@ -65,12 +65,15 @@ Usage:
     colcon build --packages-select bot_bringup
 """
 import os
+import tempfile
+
+import yaml
 
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction, SetLaunchConfiguration, Shutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, NotEqualsSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, NotEqualsSubstitution, PythonExpression
 from launch.conditions import IfCondition, UnlessCondition
 from launch_ros.actions import Node, LifecycleNode
 
@@ -91,6 +94,104 @@ def _rviz_available():
         return False
 
 
+def _capped_nav2_params(path, max_speed, max_turn):
+    """Nav2 params with speeds capped for slow first laps: returns (path to
+    use, what changed). Caps the controller (DWB max_vel_x/max_speed_xy/
+    max_vel_theta, MPPI vx_max/wz_max), the velocity smoother and the spin
+    behaviour -- the smoother alone would clamp output while the controller
+    still planned for full speed. max_speed/max_turn <= 0 leave that axis
+    alone; nothing capped returns the original path."""
+    if max_speed <= 0 and max_turn <= 0:
+        return path, []
+    with open(path) as f:
+        params = yaml.safe_load(f) or {}
+    changed = []
+
+    def cap(d, key, limit):
+        v = d.get(key)
+        if limit > 0 and isinstance(v, (int, float)) and abs(v) > limit:
+            d[key] = limit if v > 0 else -limit
+            changed.append(key)
+
+    ctrl = (params.get('controller_server') or {}).get('ros__parameters') or {}
+    for plugin in ctrl.values():
+        if isinstance(plugin, dict):
+            for key in ('max_vel_x', 'max_speed_xy', 'vx_max'):
+                cap(plugin, key, max_speed)
+            for key in ('max_vel_theta', 'max_speed_theta', 'wz_max'):
+                cap(plugin, key, max_turn)
+    smoother = (params.get('velocity_smoother') or {}).get('ros__parameters') or {}
+    for key in ('max_velocity', 'min_velocity'):
+        vel = smoother.get(key)
+        if isinstance(vel, list) and len(vel) == 3:
+            for i, limit in ((0, max_speed), (2, max_turn)):
+                if limit > 0 and abs(vel[i]) > limit:
+                    vel[i] = limit if vel[i] > 0 else -limit
+                    changed.append(f'velocity_smoother.{key}[{i}]')
+    cap((params.get('behavior_server') or {}).get('ros__parameters') or {}, 'max_rotational_vel', max_turn)
+    fd, out = tempfile.mkstemp(prefix='nav2_capped_', suffix='.yaml')
+    with os.fdopen(fd, 'w') as f:
+        yaml.safe_dump(params, f)
+    return out, changed
+
+
+def _race_route(context):
+    """Race mode's route file: the 'route' argument as a name in config/maps
+    (<name>.route.yaml) or a path; '' if not given."""
+    value = LaunchConfiguration('route').perform(context).strip()
+    if not value:
+        return ''
+    if value.endswith('.yaml') or os.sep in value:
+        return os.path.abspath(os.path.expanduser(value))
+    return os.path.join(get_package_share_directory('bot_bringup'), 'config', 'maps', f'{value}.route.yaml')
+
+
+def _nav2_and_race(context, *args, **kwargs):
+    """Nav2 params (speed-capped if asked) for the Nav2 include that
+    follows, plus -- in race mode -- the start trigger and lap_navigator.
+
+    Race mode (Plan B, see PREP_DAY.md) races on slam_toolbox's LIVE map
+    instead of a saved one: every run starts on the marked start spot, so
+    the live map's origin is the start and a route recorded (relative to
+    that same start) in an earlier mapping run still lines up."""
+    pkg_bringup = get_package_share_directory('bot_bringup')
+    base = os.path.join(pkg_bringup, 'config', LaunchConfiguration('nav2_params_file').perform(context))
+    params_path, changed = _capped_nav2_params(
+        base,
+        float(LaunchConfiguration('max_speed').perform(context) or 0),
+        float(LaunchConfiguration('max_turn').perform(context) or 0))
+    actions = [SetLaunchConfiguration('nav2_params_resolved', params_path)]
+    if changed:
+        actions.append(LogInfo(msg=f"Nav2 speeds capped ({', '.join(changed)}) via {params_path}"))
+    if LaunchConfiguration('race').perform(context) != 'true':
+        return actions
+
+    use_sim = LaunchConfiguration('use_sim').perform(context) == 'true'
+    route_file = _race_route(context)
+    if route_file and not os.path.isfile(route_file):
+        return actions + [LogInfo(msg=f"FATAL: race route {route_file} not found"),
+                          Shutdown(reason='race route missing')]
+    actions.append(LogInfo(msg=(
+        f"RACE MODE on the live SLAM map, route {route_file}" if route_file else
+        "RACE MODE with no route:= -- lap_navigator falls back to its BUILT-IN sim checkpoints "
+        "(only meaningful in sim)")))
+    actions.append(Node(
+        package='bot_perception', executable='start_trigger_node', name='start_trigger_node', output='screen',
+        parameters=[{'image_topic': '/camera/image_raw', 'use_sim_time': True}] if use_sim else
+                   [{'use_sim_time': False}],
+    ))
+    actions.append(Node(
+        package='bot_navigation', executable='lap_navigator_node', name='lap_navigator_node', output='screen',
+        parameters=[{
+            'course': LaunchConfiguration('world'),
+            'num_laps': LaunchConfiguration('num_laps'),
+            'route_file': route_file,
+            'use_sim_time': use_sim,
+        }],
+    ))
+    return actions
+
+
 def generate_launch_description():
     pkg_gazebo = get_package_share_directory('bot_gazebo')
     pkg_bringup = get_package_share_directory('bot_bringup')
@@ -98,6 +199,12 @@ def generate_launch_description():
 
     def _slam_toolbox_node(context, *args, **kwargs):
         x_str, y_str, yaw_str = LaunchConfiguration('resume_pose').perform(context).split(',')
+        param_files = [PathJoinSubstitution([pkg_bringup, 'config', 'slam_toolbox_params.yaml']).perform(context)]
+        # Optional tuning on top of the base file (later files win) -- the web
+        # dashboard's SLAM settings write this; see slam_params_overrides.
+        overrides = LaunchConfiguration('slam_params_overrides').perform(context)
+        if overrides and os.path.isfile(overrides):
+            param_files.append(overrides)
         return [
             LifecycleNode(
                 package='slam_toolbox',
@@ -106,7 +213,7 @@ def generate_launch_description():
                 namespace='',
                 output='screen',
                 parameters=[
-                    PathJoinSubstitution([pkg_bringup, 'config', 'slam_toolbox_params.yaml']).perform(context),
+                    *param_files,
                     {
                         'use_sim_time': LaunchConfiguration('use_sim').perform(context) == 'true',
                         'map_file_name': LaunchConfiguration('resume_map').perform(context),
@@ -197,6 +304,39 @@ def generate_launch_description():
                 'obstacle_course_cfr, speed_course_cfr, obstacle_course, '
                 'speed_course, or onshape_course'
             ),
+        ),
+        DeclareLaunchArgument(
+            'race',
+            default_value='false',
+            description='Plan B: race on the LIVE slam map (no saved map) -- Nav2 + start trigger + '
+                        'lap_navigator instead of the frontier explorer. Start on the marked start spot.',
+        ),
+        DeclareLaunchArgument(
+            'route',
+            default_value='',
+            description='Race mode route: a name in config/maps (<name>.route.yaml) or a path',
+        ),
+        DeclareLaunchArgument(
+            'num_laps',
+            default_value='0',
+            description='Race mode laps; 0 = the route file\'s / course default',
+        ),
+        DeclareLaunchArgument(
+            'max_speed',
+            default_value='0.0',
+            description='Cap Nav2 forward speed (m/s); 0 = the params file as-is',
+        ),
+        DeclareLaunchArgument(
+            'max_turn',
+            default_value='0.0',
+            description='Cap Nav2 turn rate (rad/s); 0 = the params file as-is',
+        ),
+        DeclareLaunchArgument(
+            'slam_params_overrides',
+            default_value='',
+            description='Optional YAML (slam_toolbox: ros__parameters: ...) loaded on top '
+                        'of config/slam_toolbox_params.yaml -- the web dashboard\'s SLAM '
+                        'settings write one',
         ),
         DeclareLaunchArgument(
             'nav2_params_file',
@@ -307,6 +447,7 @@ def generate_launch_description():
         # nav2_mapping_params.yaml, not nav2_params.yaml -- see that file's
         # global_costmap comment for why mapping needs its own copy rather
         # than sharing the race-day params file.
+        OpaqueFunction(function=_nav2_and_race),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 PathJoinSubstitution([pkg_nav2, 'launch', 'navigation_launch.py'])
@@ -315,7 +456,7 @@ def generate_launch_description():
             launch_arguments={
                 'namespace': '',
                 'use_sim_time': LaunchConfiguration('use_sim'),
-                'params_file': PathJoinSubstitution([pkg_bringup, 'config', LaunchConfiguration('nav2_params_file')]),
+                'params_file': LaunchConfiguration('nav2_params_resolved'),  # set by _nav2_and_race
                 'autostart': 'true',
             }.items(),
         ),
@@ -328,7 +469,10 @@ def generate_launch_description():
             package='bot_explore',
             executable='frontier_explore_node',
             output='screen',
-            condition=IfCondition(NotEqualsSubstitution(LaunchConfiguration('teleop'), 'true')),
+            # Not in teleop mode (you drive) nor race mode (lap_navigator drives)
+            condition=IfCondition(PythonExpression([
+                "'", LaunchConfiguration('teleop'), "' != 'true' and '",
+                LaunchConfiguration('race'), "' != 'true'"])),
             parameters=[{
                 'use_sim_time': LaunchConfiguration('use_sim'),
                 'save_map_name': LaunchConfiguration('map_save_path'),
