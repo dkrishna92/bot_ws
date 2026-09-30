@@ -160,8 +160,10 @@ scripts/test_start_signal.py --start-camera --ros-args -p roi:="[0.2, 0.0, 0.35,
 ```
 
 **Manual start (incurs the 5 s time penalty — use only if vision fails):**
-in a second sourced terminal, publish the latched start signal the lap
-navigator is waiting on:
+the dashboard's **Manual start** button (Race section; only while Plan A or
+Plan B is running), or in a second sourced terminal publish the latched
+start signal the lap navigator is waiting on. Both plans otherwise wait for
+the green light -- for practice laps, use the button:
 
 ```bash
 ros2 topic pub -1 --qos-durability transient_local \

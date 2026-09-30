@@ -125,7 +125,8 @@
         <div class="note">Robot on the start mark. Before the start signal, run <code>scripts/check_localization.py</code>.</div>
         <label>Speed cap <input type="number" id="capSpeed" min="0" step="0.1" placeholder="m/s" style="width:5rem;">
           <input type="number" id="capTurn" min="0" step="0.1" placeholder="rad/s" style="width:5rem;">
-          <span class="note">blank = full speed; e.g. 0.4 / 1.0 for first laps</span></label>
+          <span class="note">blank = full speed; e.g. 1.2 / 1.0 for first laps. The robot can't
+            drive straight slower than ~1.1 m/s (motor floor), so lower caps change nothing</span></label>
         <div class="choice">
           <div><b>Plan A</b> -- saved map
             <label>map <select id="raceMap"><option value="">(loading...)</option></select>
@@ -136,6 +137,9 @@
             <div><button id="btnRaceLive">Race on live map</button></div>
             <div class="note">maps live as it drives, following the route saved under the Map name (step 1)</div></div>
         </div>
+        <div><button id="btnManualStart">Manual start</button>
+          <span class="note">both plans wait for the green start light; this starts without it
+            (5 s penalty in the race) -- for practice, or if vision fails</span></div>
       </section>
     </div>
 
@@ -271,10 +275,14 @@ bindHoldButton('btnArcLeft', 'q');
 bindHoldButton('btnArcRight', 'e');
 
 // Start / Stop / Mapping Run (new or resume) / Save (checkpoint or final).
-// Saved race maps for bringup ("map" first -- the launch's default).
+// Saved race maps for bringup. Defaults to the Map name (step 1) when a
+// saved map has that name -- it used to default to "map", so a race right
+// after saving "Speedcourse" silently ran on the old map.yaml.
+let raceMapPicked = false;  // true once the user picks one by hand
 function loadMaps() {
   const sel = document.getElementById('raceMap');
   const keep = sel.value;
+  const course = document.getElementById('mapName').value.trim();
   fetch('/api/maps').then(r => r.json()).then(d => {
     sel.innerHTML = '';
     for (const name of d.maps) {
@@ -283,10 +291,13 @@ function loadMaps() {
       sel.appendChild(opt);
     }
     if (!d.maps.length) sel.innerHTML = '<option value="">(no saved maps)</option>';
-    if (d.maps.includes(keep)) sel.value = keep;
+    if (!raceMapPicked && d.maps.includes(course)) sel.value = course;
+    else if (d.maps.includes(keep)) sel.value = keep;
   });
 }
 loadMaps();
+document.getElementById('raceMap').addEventListener('change', () => { raceMapPicked = true; });
+document.getElementById('mapName').addEventListener('change', () => { raceMapPicked = false; loadMaps(); });
 
 // Nav2 params variants installed with bot_bringup (default file first).
 fetch('/api/nav2_params').then(r => r.json()).then(d => {
@@ -304,6 +315,7 @@ fetch('/api/nav2_params').then(r => r.json()).then(d => {
 document.getElementById('raceMap').addEventListener('focus', loadMaps);
 document.getElementById('btnStart').addEventListener('click', () => {
   const map = document.getElementById('raceMap').value;
+  if (!confirm(`Start the race on map '${map || 'map'}'? Robot on its start mark, e-stop in hand?`)) return;
   fetch('/api/launch/bringup', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -357,6 +369,10 @@ function saveTo(endpoint, fieldId = 'mapName') {
     .then(r => r.json())
     .then(s => { alert(s.message); loadMaps(); });
 }
+document.getElementById('btnManualStart').addEventListener('click', () => {
+  if (!confirm('Start the race now without the start light (5 s penalty in a real race)? E-stop in hand?')) return;
+  fetch('/api/manual_start', { method: 'POST' }).then(r => r.json()).then(s => alert(s.message));
+});
 document.getElementById('btnRaceLive').addEventListener('click', () => {
   if (confirm('Plan B: race on the live map with the recorded route. Robot on the marked start spot, e-stop in hand?'))
     startMapping(false, false, true);

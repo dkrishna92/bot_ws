@@ -104,7 +104,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from nav_msgs.msg import OccupancyGrid
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 from slam_toolbox.srv import SaveMap, SerializePoseGraph
 
 TELEOP_STALE_S = 0.5  # zero cmd_vel if the browser stops sending for this long
@@ -387,6 +387,9 @@ class WebControlNode(Node):
                     self._send_json({"ok": ok, "message": msg})
                 elif self.path == "/api/stop":
                     ok, msg = node.stop_launch()
+                    self._send_json({"ok": ok, "message": msg})
+                elif self.path == "/api/manual_start":
+                    ok, msg = node.manual_start()
                     self._send_json({"ok": ok, "message": msg})
                 else:
                     self.send_response(404)
@@ -960,6 +963,7 @@ class WebControlNode(Node):
         with self._lock:
             if self._proc is not None and self._proc.poll() is None:
                 return False, f"'{self._proc_label}' is already running -- stop it first"
+        self._drop_start_publisher()
         launch_file = "bringup.launch.py" if target == "bringup" else "mapping.launch.py"
         cmd = ["ros2", "launch", "bot_bringup", launch_file,
                f"use_sim:={'true' if self._use_sim else 'false'}", f"world:={self._world}"]
@@ -1040,6 +1044,43 @@ class WebControlNode(Node):
                     "resume" if resume else "auto" if autonomous else "mapping")
             msg += "; " + self.start_recording(f"{(map_name or 'map').strip() or 'map'}_{kind}", record_camera)[1]
         return True, msg
+
+    # ---- manual start ----------------------------------------------------
+
+    MANUAL_START_HOLD_S = 3.0
+
+    def manual_start(self) -> tuple[bool, str]:
+        """Publish start_signal=True like start_trigger_node does on the
+        green light (latched: lap_navigator subscribes transient_local).
+        Rules: a manual start costs a 5 s penalty. The publisher is dropped
+        after MANUAL_START_HOLD_S -- a latched True left behind would start
+        the NEXT race launch the moment its lap_navigator subscribed."""
+        with self._lock:
+            running = self._proc_label if (self._proc is not None and self._proc.poll() is None) else None
+        if running not in ("bringup", "race (live map)"):
+            return False, "manual start only works while a race launch (Plan A or Plan B) is running"
+        self._drop_start_publisher()
+        qos = QoSProfile(depth=1, history=QoSHistoryPolicy.KEEP_LAST,
+                         durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+                         reliability=QoSReliabilityPolicy.RELIABLE)
+        pub = self.create_publisher(Bool, "start_signal", qos)
+        pub.publish(Bool(data=True))
+        timer = threading.Timer(self.MANUAL_START_HOLD_S, self._drop_start_publisher)
+        timer.daemon = True
+        with self._lock:
+            self._start_pub, self._start_timer = pub, timer
+        timer.start()
+        self.get_logger().warn("MANUAL START sent on start_signal (5 s penalty in a real race)")
+        return True, "start signal sent -- lap_navigator should start the route now"
+
+    def _drop_start_publisher(self) -> None:
+        with self._lock:
+            pub, timer = getattr(self, "_start_pub", None), getattr(self, "_start_timer", None)
+            self._start_pub = self._start_timer = None
+        if timer is not None:
+            timer.cancel()
+        if pub is not None:
+            self.destroy_publisher(pub)
 
     # ---- rosbag recording ------------------------------------------------
 

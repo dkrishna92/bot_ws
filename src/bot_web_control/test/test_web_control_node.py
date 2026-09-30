@@ -926,3 +926,44 @@ def test_stop_closes_the_recording_and_reports_the_bag(tmp_path, monkeypatch):
     assert "rosbag saved to runs/desk_mapping_" in msg
     assert signals[0] == __import__("signal").SIGTERM
     assert node.status()["recording"] is None
+
+
+# ---- manual start ----
+
+def _start_node(monkeypatch, label):
+    node = _make_node()
+    pubs, destroyed = [], []
+    node.create_publisher = lambda typ, topic, qos: pubs.append((topic, qos, _FakePublisher())) or pubs[-1][2]
+    node.destroy_publisher = lambda pub: destroyed.append(pub)
+    if label:
+        node._proc, node._proc_label = _FakePopen(["x"]), label
+    return node, pubs, destroyed
+
+
+def test_manual_start_refused_without_a_race_launch(monkeypatch):
+    node, pubs, _ = _start_node(monkeypatch, "mapping")
+    ok, msg = node.manual_start()
+    assert ok is False and not pubs
+
+
+def test_manual_start_publishes_latched_true_then_drops_it(monkeypatch):
+    import time as _time
+    from rclpy.qos import QoSDurabilityPolicy
+    node, pubs, destroyed = _start_node(monkeypatch, "race (live map)")
+    monkeypatch.setattr(type(node), "MANUAL_START_HOLD_S", 0.05)
+    ok, _ = node.manual_start()
+    topic, qos, pub = pubs[0]
+    assert ok is True and topic == "start_signal" and pub.published[0].data is True
+    assert qos.durability == QoSDurabilityPolicy.TRANSIENT_LOCAL  # lap_navigator subscribes latched
+    _time.sleep(0.2)
+    assert destroyed == [pub]  # no latched True left for the next launch
+
+
+def test_new_launch_drops_a_pending_manual_start(monkeypatch):
+    node, pubs, destroyed = _start_node(monkeypatch, "bringup")
+    node.manual_start()
+    node._proc = None
+    monkeypatch.setattr("bot_web_control.web_control_node.subprocess.Popen",
+                        lambda cmd, **kw: _FakePopen(cmd, **kw))
+    node.start_launch("mapping")
+    assert destroyed == [pubs[0][2]]
