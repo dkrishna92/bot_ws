@@ -64,11 +64,13 @@ class MotorNode(Node):
         # Higher floor used only while the two sides turn in opposite
         # directions (pivoting in place): skid-steer wheels have to scrub
         # sideways, which needs far more torque than rolling straight, and
-        # Set from scripts/rotate.py (2026-09-29): pivoting on tile breaks
-        # away at 40% duty, so 0.45. Carpet needs much more (it wouldn't
-        # turn at 0.5) -- re-measure with rotate.py on the actual course
-        # surface and set this a few percent above its breakaway duty.
-        self.declare_parameter("min_turn_duty_cycle", 0.45)
+        # Set from scripts/rotate.py: pivoting on tile broke away at 40%
+        # duty (2026-09-29, was 0.45); 2026-09-30 it broke away at 61%, so
+        # 0.66. Re-measure with rotate.py on the actual course surface and
+        # set this a few percent above its breakaway duty. Once turning, 61%
+        # spun ~110 deg/s -- a floor this high makes small pivot
+        # corrections overshoot (use Q/E arcs while mapping).
+        self.declare_parameter("min_turn_duty_cycle", 0.66)
         self.declare_parameter("cmd_vel_timeout_s", 0.3)
         self.declare_parameter("track_width_m", 0.33)  # measured 2026-09-30 (was 0.32)
         self.declare_parameter("max_linear_speed_mps", 2.0)

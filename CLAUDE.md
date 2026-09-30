@@ -397,7 +397,11 @@ Laptop-first, Pi 5 for final integration:
   or wiring sag). `drive_straight.py`/`rotate.py` now print encoder
   diagnostics and whether FLT clears on its own after a fault; re-run them
   to narrow it down. Pivot breakaway measured at 40% duty on tile
-  (`min_turn_duty_cycle` 0.45); carpet needs far more.
+  (2026-09-29), then 61% on 2026-09-30 (`min_turn_duty_cycle` now 0.66;
+  that run had no driver fault at 61% on both sides, 2 missed encoder
+  states, and the wheels slipped ~30% vs the IMU). Once moving, 61% spun
+  ~110 deg/s, so this floor makes small pivot corrections overshoot; a
+  kick-start (high floor only for the first ~150 ms of a pivot) would fix it.
 - Nav2 params: `robot_radius` now matches `bot.urdf.xacro`'s real footprint
   and the map-then-race launch wiring (mapping.launch.py / bringup.launch.py)
   is in place; costmap inflation and controller gains are being addressed
