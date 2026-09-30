@@ -309,7 +309,12 @@ local_costmap:
         oak_points:
           topic: /oak/points
           data_type: "PointCloud2"
-          min_obstacle_height: 0.02
+          # 0.06, not 0.02 (2026-10-01): the course is asphalt with loose hay
+          # on it, and the OAK sits ~10 cm up -- at 2 cm, hay, bumps and
+          # stereo-depth noise a few metres out would all mark phantom
+          # obstacles. Bales (35 cm+) are still seen; the lidar (~15 cm) is
+          # unaffected. Potholes are invisible either way (below ground).
+          min_obstacle_height: 0.06
           max_obstacle_height: 1.0
           obstacle_max_range: 3.0
           clearing: true
@@ -378,7 +383,12 @@ global_costmap:
         oak_points:
           topic: /oak/points
           data_type: "PointCloud2"
-          min_obstacle_height: 0.02
+          # 0.06, not 0.02 (2026-10-01): the course is asphalt with loose hay
+          # on it, and the OAK sits ~10 cm up -- at 2 cm, hay, bumps and
+          # stereo-depth noise a few metres out would all mark phantom
+          # obstacles. Bales (35 cm+) are still seen; the lidar (~15 cm) is
+          # unaffected. Potholes are invisible either way (below ground).
+          min_obstacle_height: 0.06
           max_obstacle_height: 1.0
           obstacle_max_range: 3.0
           clearing: true

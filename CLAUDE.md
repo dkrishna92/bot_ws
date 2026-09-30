@@ -12,6 +12,15 @@ courses: "speed" (3 laps) and "obstacle" (2 laps + obstacle handling).
 Safety review due September 25, 2026. Path-following demo milestone is
 already complete — current effort targets the full October competition.
 
+Course surface (confirmed 2026-10-01): asphalt road throughout; the
+obstacle course also has potholes and sand sections; loose hay may lie on
+the road. Potholes are negative obstacles -- invisible to the 2D lidar and
+to the OAK voxel layer (it only marks points above the road) -- so race
+routes must be recorded to steer around them. The OAK voxel layers'
+min_obstacle_height is 0.06 m (was 0.02) so loose hay/depth noise on the
+road doesn't mark phantom obstacles. Pivot breakaway must be measured on
+asphalt (it was 40% duty on tile).
+
 Hard constraints from the rules doc:
 - Robot: max 16"W x 24"L x 16"H, 25 lb, 50V max onboard
 - Vision-based autonomous start trigger (manual trigger = 5s time penalty)

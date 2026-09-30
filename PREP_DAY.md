@@ -7,6 +7,24 @@ finishes beats a fast one that doesn't.
 Commands assume the Pi, in `~/bot_ws`, with the workspace sourced. The
 race-day procedure itself is [RACE_DAY.md](RACE_DAY.md).
 
+## The course surface
+
+Asphalt road everywhere; the obstacle course also has **potholes** and
+**sand**; there may be **loose hay** on the road.
+- **Asphalt:** grippy, so pivoting in place takes much more power than on
+  tile (tile broke away at 40%). Measure first (Block 1) and prefer Q/E arcs.
+- **Loose hay:** the depth camera now ignores anything under 6 cm (was 2 cm,
+  which would have marked hay and depth noise as obstacles). If the costmap
+  still shows phantom obstacles on open road, raise
+  `min_obstacle_height` in the `nav2*params*.yaml` voxel layers.
+- **Potholes are invisible to the robot:** the lidar sees only things at its
+  height, and the camera marks only things *above* the road. Nav2 will plan
+  straight through them, so **record route checkpoints that steer around
+  them** (an extra checkpoint on each side of a pothole).
+- **Sand:** the wheels slip (odometry overstates distance, and AMCL corrects
+  it with the lidar) and load rises (driver-fault risk). Drive through slowly,
+  and don't stop in it.
+
 ## Priorities, in order
 
 1. **Safety.** The e-stop cuts the motors within 1 s at full course range. No pass, no race.
@@ -50,7 +68,7 @@ recorded start pose, and every race starts on exactly that spot.
   move the antennas and walk again.
 - **Stopping time:** while the robot drives slowly, press the kill switch and
   time the stop. It must stop in under 1 s.
-- **Turning:** run `scripts/rotate.py` on the course surface. Set `motor_node`'s
+- **Turning:** run `scripts/rotate.py` **on the asphalt**. Set `motor_node`'s
   `min_turn_duty_cycle` a few points above the breakaway duty it reports.
 - **Driving straight:** run `scripts/drive_straight.py --distance 3`. Check the
   encoder diagnostics (peak tick rate, missed states) and whether any driver
