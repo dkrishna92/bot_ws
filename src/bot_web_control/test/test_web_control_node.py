@@ -844,3 +844,12 @@ def test_pick_checkpoint_explicit_name_wins(tmp_path):
     assert node.pick_checkpoint("", "speed", saving=True) == "speed_3"
     assert node.pick_checkpoint(None, "speed", saving=False) == "speed_2"
     assert node.pick_checkpoint(None, None, saving=True) is None  # legacy default checkpoint
+
+
+def test_starting_a_launch_clears_the_previous_map(tmp_path, monkeypatch):
+    node = _make_node()
+    node._latest_map = _make_grid([0], width=1, height=1)
+    monkeypatch.setattr("bot_web_control.web_control_node.subprocess.Popen",
+                        lambda cmd, **kw: _FakePopen(cmd, **kw))
+    node.start_launch("mapping")
+    assert node.status()["map_available"] is False

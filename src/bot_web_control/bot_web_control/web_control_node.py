@@ -1004,8 +1004,12 @@ class WebControlNode(Node):
         with self._lock:
             self._proc = proc
             self._proc_label = "race (live map)" if race else target
-        # A new launch means new map frames: drop the previous run's readouts
+        # A new launch means new map frames: drop the previous run's readouts,
+        # and its map -- otherwise a Resume keeps showing the bad section it
+        # just discarded until slam_toolbox publishes the checkpoint's map.
         self._latest_pose = self._latest_amcl = self._latest_cmd = None
+        with self._lock:
+            self._latest_map = None
         self.get_logger().info(f"started {launch_file} (pid {proc.pid}): {' '.join(cmd[4:])}")
         return True, f"started {launch_file}" + (" in race mode" if race else "")
 
