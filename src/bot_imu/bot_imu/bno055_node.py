@@ -53,6 +53,7 @@ _UNIT_SEL_GYRO_RPS = 0x02  # bit1=1: gyro output in rad/s instead of deg/s
 _ACC_LSB_PER_MS2 = 100.0
 _GYR_LSB_PER_RPS = 900.0
 _QUA_LSB_PER_UNIT = 1.0 / (1 << 14)
+_REINIT_AFTER_FAILURES = 100  # consecutive failed reads (~2 s at 50 Hz)
 
 # Approximated from the same BNO055 datasheet noise-density figures as
 # bot_gazebo/urdf/bot.urdf.xacro's simulated IMU noise -- see that file's
@@ -94,6 +95,7 @@ class Bno055Node(Node):
         self._linear_acceleration_covariance = _diag_covariance(_LINEAR_ACCELERATION_STDDEV_M_S2)
 
         self._publisher = self.create_publisher(Imu, "imu", 10)
+        self._read_failures = 0
 
         if SMBus is not None:
             self._bus = SMBus(self.get_parameter("i2c_bus").value)
@@ -132,7 +134,29 @@ class Bno055Node(Node):
         # Accel (0x08), gyro (0x14) and quaternion (0x20-0x27) registers are
         # contiguous and span exactly 32 bytes -- one block read instead of
         # ten 2-byte reads (10x fewer I2C transactions per tick).
-        block = self._bus.read_i2c_block_data(self._address, _ACC_DATA_X_LSB_ADDR, 32)
+        try:
+            block = self._bus.read_i2c_block_data(self._address, _ACC_DATA_X_LSB_ADDR, 32)
+        except OSError as exc:
+            # The BNO055 occasionally misses a read on the Pi's I2C (seen
+            # 2026-09-29: TimeoutError errno 110). That used to kill the node,
+            # leaving the EKF -- which takes heading only from here -- with
+            # no heading for the rest of the run. Skip the sample instead.
+            self._read_failures += 1
+            if self._read_failures == 1 or self._read_failures % 50 == 0:
+                self.get_logger().warn(f"IMU read failed ({exc}) -- {self._read_failures} in a row")
+            if self._read_failures % _REINIT_AFTER_FAILURES == 0:
+                # ~2 s of failures: the chip probably reset (it would then
+                # be back in CONFIG mode), so set it up again. Its heading
+                # restarts from zero, so the EKF heading may jump once.
+                self.get_logger().error("IMU unresponsive -- re-initialising the BNO055")
+                try:
+                    self._init_sensor()
+                except OSError as init_exc:
+                    self.get_logger().error(f"re-init failed: {init_exc}")
+            return
+        if self._read_failures:
+            self.get_logger().info(f"IMU reads recovered after {self._read_failures} failure(s)")
+            self._read_failures = 0
         acc_off = 0
         gyr_off = _GYR_DATA_X_LSB_ADDR - _ACC_DATA_X_LSB_ADDR
         qua_off = _QUATERNION_DATA_W_LSB_ADDR - _ACC_DATA_X_LSB_ADDR

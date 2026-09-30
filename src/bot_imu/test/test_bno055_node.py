@@ -74,3 +74,29 @@ def test_quaternion_and_rates_are_scaled_and_published(node):
     assert msg.angular_velocity.x == pytest.approx(1.0)
     assert msg.linear_acceleration.x == pytest.approx(1.0)
     assert msg.orientation_covariance[0] == pytest.approx(0.02 ** 2)
+
+
+class _FlakyBus(_FakeBus):
+    """Times out on the first `fail` reads, then answers normally."""
+
+    def __init__(self, raw_by_addr, fail):
+        super().__init__(raw_by_addr)
+        self._fail = fail
+
+    def read_i2c_block_data(self, address, start, length):
+        if self._fail > 0:
+            self._fail -= 1
+            raise TimeoutError(110, "Connection timed out")
+        return super().read_i2c_block_data(address, start, length)
+
+
+def test_failed_read_skips_the_sample_instead_of_crashing(node):
+    captured = _capture_publisher(node)
+    node._bus = _FlakyBus({0x20: int(1.0 / _QUA_LSB_PER_UNIT)}, fail=2)
+
+    node._tick()
+    node._tick()
+    assert captured == [] and node._read_failures == 2
+
+    node._tick()
+    assert len(captured) == 1 and node._read_failures == 0
