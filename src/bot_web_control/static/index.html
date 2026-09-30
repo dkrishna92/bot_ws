@@ -59,15 +59,19 @@
       </details>
       <div><button id="btnMappingAuto">Start Autonomous Mapping Run</button> (Nav2 + frontier exploration drive the robot -- wheels down, e-stop in hand)</div>
       <div><button id="btnRaceLive">Race on live map (Plan B)</button> (no saved map: slam_toolbox live + the route recorded under Map name; start on the marked start spot)</div>
+      <label>Checkpoint name (one per good section, e.g. speed_1, speed_2 -- Save Checkpoint writes it, Resume reloads it)
+        <input type="text" id="ckptName" list="ckptList" placeholder="checkpoint" style="width:12rem;">
+        <datalist id="ckptList"></datalist>
+      </label>
+      <div><button id="btnSaveCheckpoint">Save Checkpoint (to resume later)</button></div>
       <div>Current bot pose if different than saved <span id="poseSource"></span></div>
       <label>x <input type="number" id="poseX" value="0.0" step="0.1" style="width:5rem;"></label>
       <label>y <input type="number" id="poseY" value="0.0" step="0.1" style="width:5rem;"></label>
       <label>yaw (rad) <input type="number" id="poseYaw" value="0.0" step="0.1" style="width:5rem;"></label>
       <hr style="border-color:#444; width:100%;">
-      <label>Map name (optional -- blank overwrites the default file each time)
-        <input type="text" id="mapName" placeholder="e.g. obstacle_v2" style="width:12rem;">
+      <label>Map name (the course, e.g. speed -- Save Final Map, the route and the start pose all use it)
+        <input type="text" id="mapName" placeholder="map" style="width:12rem;">
       </label>
-      <div><button id="btnSaveCheckpoint">Save Checkpoint (to resume later)</button></div>
       <div><button id="btnSaveFinalMap">Save Final Map (for racing)</button></div>
       <hr style="border-color:#444; width:100%;">
       <div>Race route for this map name (<span id="routeFile">map.route.yaml</span>): <b id="routeCount">0</b> checkpoints</div>
@@ -256,7 +260,7 @@ function startMapping(resume, autonomous = false, race = false) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ resume: resume, pose: pose, autonomous: autonomous,
-                           name: document.getElementById('mapName').value.trim() || null,
+                           name: document.getElementById('ckptName').value.trim() || null,
                            race: race, route_name: document.getElementById('mapName').value.trim() || null,
                            ...speedCaps(),
                            nav2_params: document.getElementById('nav2Mapping').value || null })
@@ -268,8 +272,8 @@ document.getElementById('btnMappingAuto').addEventListener('click', () => {
   if (confirm('Autonomous mapping drives the robot on its own. E-stop in hand?')) startMapping(false, true);
 });
 
-function saveTo(endpoint) {
-  const name = document.getElementById('mapName').value.trim();
+function saveTo(endpoint, fieldId = 'mapName') {
+  const name = document.getElementById(fieldId).value.trim();
   return fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -315,9 +319,20 @@ document.getElementById('btnRouteClear').addEventListener('click', () => {
 document.getElementById('mapName').addEventListener('change', loadRoute);
 loadRoute();
 
+// Saved checkpoints, for the Checkpoint name list (pick the last good one to resume).
+function loadCheckpoints() {
+  fetch('/api/checkpoints').then(r => r.json()).then(d => {
+    const dl = document.getElementById('ckptList');
+    dl.innerHTML = '';
+    for (const n of d.checkpoints) { const o = document.createElement('option'); o.value = n; dl.appendChild(o); }
+  });
+}
+loadCheckpoints();
+document.getElementById('ckptName').addEventListener('focus', loadCheckpoints);
+
 // Resume pose: fill x/y/yaw from the pose recorded with the named checkpoint.
 function loadCheckpointPose() {
-  const name = document.getElementById('mapName').value.trim();
+  const name = document.getElementById('ckptName').value.trim();
   fetch('/api/checkpoint_pose?name=' + encodeURIComponent(name)).then(r => r.json()).then(d => {
     const src = document.getElementById('poseSource');
     if (!d.pose) { src.textContent = '(no pose recorded for this checkpoint -- enter it by hand)'; return; }
@@ -328,9 +343,9 @@ function loadCheckpointPose() {
   });
 }
 loadCheckpointPose();
-document.getElementById('mapName').addEventListener('change', loadCheckpointPose);
+document.getElementById('ckptName').addEventListener('change', loadCheckpointPose);
 document.getElementById('btnSaveCheckpoint').addEventListener('click',
-  () => saveTo('/api/save_checkpoint').then(loadCheckpointPose));
+  () => saveTo('/api/save_checkpoint', 'ckptName').then(() => { loadCheckpointPose(); loadCheckpoints(); }));
 document.getElementById('btnSaveFinalMap').addEventListener('click', () => saveTo('/api/save_final_map'));
 
 // Status + speed defaults from the server, and periodic map refresh.

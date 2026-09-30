@@ -94,8 +94,20 @@ For each course, in the dashboard:
    left/right along a 1 m arc) instead of A/D (pivot in place), since pivots
    jerk and smear the map. At each corner press **Add
    checkpoint here**, in driving order. Finish one lap back near the start.
-   After each good section, press **Save Checkpoint** so a bad turn only costs
-   that section.
+   After each good section, **stop, put a piece of tape under the robot**
+   (the resume spot), and **Save Checkpoint** with a new **Checkpoint name**
+   each time: `speed_1`, `speed_2`, ... Map name stays `speed`.
+
+   **If a section maps badly** (lanes off or rotated):
+   1. **Stop** the mapping run. Everything after the last checkpoint is thrown away.
+   2. Put the robot back on that checkpoint's tape mark, **facing the same way**.
+      Within a few cm and a few degrees is fine; the scan matcher corrects small errors.
+   3. Pick that checkpoint (e.g. `speed_2`) in **Checkpoint name**, and check
+      that x / y / yaw filled in "(from checkpoint ...)".
+   4. **Resume Mapping Run**, then drive that section again, slower.
+   5. Route checkpoints you added during the bad section are wrong: press
+      **Undo last** until the list ends at the last good corner.
+   Try this once on the first section, so you know it works before you need it.
 4. Watch the map build. If lanes come out rotated, see "If mapping fails"
    below.
 5. Press **Save Final Map** under the same name (`speed`). The map,

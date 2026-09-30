@@ -305,6 +305,8 @@ class WebControlNode(Node):
                     self._send_json({"pose": node.checkpoint_pose(name)})
                 elif self.path.startswith("/api/nav2_params"):
                     self._send_json(node.list_nav2_params())
+                elif self.path.startswith("/api/checkpoints"):
+                    self._send_json({"checkpoints": node.list_checkpoints()})
                 elif self.path.startswith("/api/maps"):
                     self._send_json({"maps": node.list_maps()})
                 elif self.path.startswith("/api/status"):
@@ -491,6 +493,17 @@ class WebControlNode(Node):
 
     def _maps_dir(self) -> str:
         return os.path.join(self._workspace_root, MAPS_DIR) if self._workspace_root else MAPS_DIR
+
+    def list_checkpoints(self) -> list[str]:
+        """Names of the saved (resumable) checkpoints: <name>.posegraph in the
+        maps directory, newest first."""
+        maps_dir = self._maps_dir()
+        try:
+            files = [f for f in os.listdir(maps_dir) if f.endswith(".posegraph")]
+        except OSError:
+            return []
+        files.sort(key=lambda f: os.path.getmtime(os.path.join(maps_dir, f)), reverse=True)
+        return [f[:-len(".posegraph")] for f in files]
 
     def list_maps(self) -> list[str]:
         """Names of the saved race maps: every <name>.yaml in the maps

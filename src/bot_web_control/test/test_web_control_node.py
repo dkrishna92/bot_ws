@@ -801,3 +801,17 @@ def test_speed_caps_not_passed_to_teleop_mapping(tmp_path, monkeypatch):
                         lambda cmd, **kw: _FakePopen(captured.setdefault("cmd", cmd), **kw))
     node.start_launch("mapping", max_speed=0.5)
     assert not any(a.startswith("max_speed:=") for a in captured["cmd"])
+
+
+def test_list_checkpoints_newest_first(tmp_path):
+    import os
+    node = _make_node()
+    node._workspace_root = str(tmp_path)
+    d = tmp_path / "src" / "bot_bringup" / "config" / "maps"
+    d.mkdir(parents=True)
+    for i, n in enumerate(("speed_1", "speed_2", "speed_3")):
+        f = d / f"{n}.posegraph"
+        f.write_bytes(b"x")
+        os.utime(f, (1000 + i, 1000 + i))
+    (d / "map.yaml").write_text("image: map.pgm\n")
+    assert node.list_checkpoints() == ["speed_3", "speed_2", "speed_1"]
