@@ -15,7 +15,7 @@
   <xacro:property name="wheel_width" value="0.06"/>  <!-- 0.06 m = 2.4 in -->
   <xacro:property name="wheelbase" value="0.216"/>   <!-- front-to-rear axle spacing, measured 0.216 m = 8.5 in (2026-09-30; was a 0.33 estimate) -->
   <xacro:property name="track_width" value="0.33"/>  <!-- left-to-right wheel-centre spacing, measured 0.33 m = 13.0 in (2026-09-30; was 0.32) -->
-  <xacro:property name="mass_base" value="3.2"/>    <!-- 3.2 kg = 7.0 lb -->
+  <xacro:property name="mass_base" value="3.545729"/>  <!-- measured 3.546 kg = 7.8 lb (2026-09-30; was 3.2) -->
   <xacro:property name="mass_wheel" value="0.2"/>   <!-- 0.2 kg = 0.44 lb each -->
   <!-- OAK-D S2 housing (~91 x 28 x 17.5 mm) and its measured mount height:
        bottom of the housing 9 cm above the ground (measured 2026-09-25).
@@ -51,7 +51,13 @@
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <mass value="${mass_base}"/>
-      <inertia ixx="0.3" ixy="0" ixz="0" iyy="0.5" iyz="0" izz="0.3"/>
+      <!-- Solid-box inertia from the mass and chassis dimensions (was a
+           hardcoded 0.3/0.5/0.3, 4-13x too large for a 3.5 kg box, which made
+           simulated turns sluggish). Recomputed automatically if the mass or
+           dimensions change. -->
+      <inertia ixx="${mass_base/12 * (base_width*base_width + base_height*base_height)}" ixy="0" ixz="0"
+               iyy="${mass_base/12 * (base_length*base_length + base_height*base_height)}" iyz="0"
+               izz="${mass_base/12 * (base_length*base_length + base_width*base_width)}"/>
     </inertial>
     <visual>
       <origin xyz="0 0 ${ground_clearance + base_height/2}" rpy="0 0 0"/>
