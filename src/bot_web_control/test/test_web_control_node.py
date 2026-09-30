@@ -116,6 +116,19 @@ def test_render_map_png_maps_occupancy_values_to_greyscale():
     assert row[2] == 0    # occupied -> black
 
 
+def test_map_png_comes_with_its_placement_for_the_overlay():
+    node = _make_node()
+    grid = _make_grid([0, 0, 0, 0, 0, 0], width=3, height=2)
+    grid.info.resolution = 0.05
+    grid.info.origin.position.x, grid.info.origin.position.y = -1.5, 2.0
+    node._latest_map = grid
+    png, info = node.render_map_png_with_info()
+    assert png == node.render_map_png()
+    assert info == {"width": 3, "height": 2, "resolution": pytest.approx(0.05),
+                    "origin_x": -1.5, "origin_y": 2.0}
+    assert node.render_map_png_with_info() != (None, None)
+
+
 def test_render_map_png_flips_rows_top_to_bottom():
     # Row 0 (occupancy convention: min-y) is all-free; row 1 is all-occupied.
     # Rendered image should show row 1's content on top (image row 0).

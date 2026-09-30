@@ -281,7 +281,7 @@ class WebControlNode(Node):
                 if self.path == "/" or self.path == "/index.html":
                     self._serve_static("index.html", "text/html")
                 elif self.path.startswith("/api/map.png"):
-                    png = node.render_map_png()
+                    png, info = node.render_map_png_with_info()
                     if png is None:
                         self.send_response(503)
                         self.end_headers()
@@ -290,6 +290,8 @@ class WebControlNode(Node):
                     self.send_header("Content-Type", "image/png")
                     self.send_header("Content-Length", str(len(png)))
                     self.send_header("Cache-Control", "no-store")
+                    # Placement of this exact image, for the page's route/pose overlay
+                    self.send_header("X-Map-Info", json.dumps(info))
                     self.end_headers()
                     self.wfile.write(png)
                 elif self.path.startswith("/api/route"):
@@ -466,13 +468,24 @@ class WebControlNode(Node):
             self._zeroed_since_stale = False
 
     def render_map_png(self) -> bytes | None:
+        return self.render_map_png_with_info()[0]
+
+    def render_map_png_with_info(self) -> tuple[bytes | None, dict | None]:
+        """The map PNG plus where it sits in the map frame (one snapshot, so
+        the page's overlay matches the image even while the map grows).
+        Assumes an unrotated origin, as slam_toolbox and map_server give."""
         with self._lock:
             grid = self._latest_map
         if grid is None:
-            return None
+            return None, None
         w, h = grid.info.width, grid.info.height
         if w == 0 or h == 0:
-            return None
+            return None, None
+        info = {"width": w, "height": h, "resolution": grid.info.resolution,
+                "origin_x": grid.info.origin.position.x, "origin_y": grid.info.origin.position.y}
+        return self._grid_png(grid, w, h), info
+
+    def _grid_png(self, grid, w: int, h: int) -> bytes:
         # nav_msgs/OccupancyGrid convention: -1 unknown, 0 free, 100 occupied.
         arr = np.asarray(grid.data, dtype=np.int16).reshape(h, w)
         pixels = np.where(arr < 0, 205, (254.0 - (arr / 100.0) * 254.0).astype(np.int16))

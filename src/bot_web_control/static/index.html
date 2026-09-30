@@ -21,6 +21,7 @@
   #mapBox { position: relative; width: 480px; height: 480px; max-width: 90vw; max-height: 90vw;
             border: 1px solid #555; background: #000; }
   #mapImg { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; display: none; }
+  #mapOverlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   #mapEmpty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
               color: #777; font-size: 0.9rem; }
   .dpad { display: grid; grid-template-columns: 60px 60px 60px; grid-template-rows: 60px 60px;
@@ -160,7 +161,9 @@
 
     <div class="panel">
       <div>Map</div>
-      <div id="mapBox"><img id="mapImg" alt="map"><div id="mapEmpty">no map yet</div></div>
+      <div id="mapBox"><img id="mapImg" alt="map"><canvas id="mapOverlay"></canvas><div id="mapEmpty">no map yet</div></div>
+      <div class="note"><span style="color:#fa0">&#9679;</span> route checkpoints (Map name) &nbsp;
+        <span style="color:#3c3">&#9650;</span> race start &nbsp; <span style="color:#39f">&#9650;</span> robot</div>
     </div>
 
     <div class="panel">
@@ -200,6 +203,50 @@ angInput.addEventListener('input', () => { angSpeed = Number(angInput.value); re
 
 const held = new Set();
 let mapAvailable = false;  // from /api/status; gates the map PNG refresh
+
+// Map overlay: route checkpoints, race start pose and the robot, drawn over
+// the map image using the placement the server sends with each PNG
+// (X-Map-Info). Map frame -> image pixels: the image is the grid flipped
+// (row 0 = max y), scaled to fit the box like object-fit: contain.
+let mapInfo = null, routePts = [], startPose = null, livePose = null;
+function drawArrow(ctx, u, v, yaw, color) {
+  ctx.save(); ctx.translate(u, v); ctx.rotate(-yaw);  // screen y points down
+  ctx.fillStyle = color; ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(13, 0); ctx.lineTo(-8, 7); ctx.lineTo(-4, 0); ctx.lineTo(-8, -7); ctx.closePath();
+  ctx.fill(); ctx.stroke(); ctx.restore();
+}
+function drawOverlay() {
+  const cv = document.getElementById('mapOverlay'), box = document.getElementById('mapBox');
+  const W = box.clientWidth, H = box.clientHeight, dpr = window.devicePixelRatio || 1;
+  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) {
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  }
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+  if (!mapInfo || !mapAvailable) return;
+  const m = mapInfo, sc = Math.min(W / m.width, H / m.height);
+  const x0 = (W - m.width * sc) / 2, y0 = (H - m.height * sc) / 2;
+  const px = (x, y) => [x0 + (x - m.origin_x) / m.resolution * sc,
+                        y0 + (m.height - (y - m.origin_y) / m.resolution) * sc];
+  if (routePts.length) {
+    // driving order, and each lap closes back to checkpoint 1
+    ctx.strokeStyle = 'rgba(255,170,0,0.85)'; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    routePts.forEach((p, i) => { const [u, v] = px(p[0], p[1]); i ? ctx.lineTo(u, v) : ctx.moveTo(u, v); });
+    if (routePts.length > 2) ctx.closePath();
+    ctx.stroke(); ctx.setLineDash([]);
+    ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    routePts.forEach((p, i) => {
+      const [u, v] = px(p[0], p[1]);
+      ctx.beginPath(); ctx.arc(u, v, 9, 0, 2 * Math.PI);
+      ctx.fillStyle = '#fa0'; ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.fillStyle = '#000'; ctx.fillText(String(i + 1), u, v + 0.5);
+    });
+  }
+  if (startPose) { const [u, v] = px(+startPose.x, +startPose.y); drawArrow(ctx, u, v, +startPose.yaw, '#3c3'); }
+  if (livePose) { const [u, v] = px(livePose.x, livePose.y); drawArrow(ctx, u, v, livePose.yaw, '#39f'); }
+}
+window.addEventListener('resize', drawOverlay);
 // Q/E radius: at 0.3 m/s this turns ~17 deg/s, so ~2 s of holding for a
 // 30 deg change of direction -- no pivot, both sides keep driving forward.
 const ARC_RADIUS_M = 1.0;
@@ -384,6 +431,7 @@ function showRoute(d) {
   const pts = d.checkpoints || [];
   document.getElementById('routeCount').textContent = pts.length;
   const sp = d.start_pose;
+  routePts = pts; startPose = sp || null; drawOverlay();
   document.getElementById('startPose').textContent =
     sp ? `x ${(+sp.x).toFixed(2)}  y ${(+sp.y).toFixed(2)}  yaw ${(+sp.yaw).toFixed(2)}` : 'not set';
   document.getElementById('routeList').textContent =
@@ -463,6 +511,7 @@ function refreshStatus() {
       ? `cmd_vel: lin ${c.linear.toFixed(2)} m/s  ang ${c.angular.toFixed(2)} rad/s` + ageTxt(c.age_s)
       : 'cmd_vel: none yet';
     const p = s.pose;
+    livePose = p && p.age_s < 30 ? p : null; drawOverlay();
     document.getElementById('livePose').innerHTML = p
       ? `pose (${p.source}): x ${p.x.toFixed(2)}  y ${p.y.toFixed(2)}  yaw ${p.yaw.toFixed(2)} rad` +
         ` (${(p.yaw * 180 / Math.PI).toFixed(0)}&deg;)` + ageTxt(p.age_s)
@@ -541,10 +590,25 @@ document.getElementById('btnTopicRead').addEventListener('click', () => {
   clearInterval(topicTimer); readTopic(); topicTimer = setInterval(readTopic, 1000);
 });
 document.getElementById('btnTopicStop').addEventListener('click', () => { clearInterval(topicTimer); topicTimer = null; });
-// Only fetch the PNG while a map exists (no broken-image flashes before that)
-setInterval(() => {
-  if (mapAvailable) document.getElementById('mapImg').src = '/api/map.png?t=' + Date.now();
-}, 2000);
+// Only fetch the PNG while a map exists (no broken-image flashes before that).
+// fetch() rather than img.src, to read the image's X-Map-Info placement.
+let mapUrl = null;
+function refreshMap() {
+  if (!mapAvailable) return;
+  fetch('/api/map.png?t=' + Date.now()).then(r => {
+    if (!r.ok) throw new Error('no map');
+    const h = r.headers.get('X-Map-Info');
+    return r.blob().then(b => [b, h ? JSON.parse(h) : null]);
+  }).then(([blob, info]) => {
+    const img = document.getElementById('mapImg'), url = URL.createObjectURL(blob);
+    img.onload = () => {
+      if (mapUrl) URL.revokeObjectURL(mapUrl);
+      mapUrl = url; mapInfo = info; drawOverlay();
+    };
+    img.src = url;
+  }).catch(() => {});
+}
+setInterval(refreshMap, 2000);
 </script>
 </body>
 </html>
