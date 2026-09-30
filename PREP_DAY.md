@@ -62,7 +62,9 @@ For each course, in the dashboard:
    In another terminal, run `scripts/record_run.sh <course>_map`.
 2. Enter the course name (e.g. `speed`) in **Map name**, then press
    **Set race start pose here** while still on the start spot.
-3. Drive the course **slowly, with gentle turns**. At each corner press **Add
+3. Drive the course **slowly, with gentle turns**: use **Q/E** (veer
+   left/right along a 1 m arc) instead of A/D (pivot in place), since pivots
+   jerk and smear the map. At each corner press **Add
    checkpoint here**, in driving order. Finish one lap back near the start.
    After each good section, press **Save Checkpoint** so a bad turn only costs
    that section.

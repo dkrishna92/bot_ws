@@ -57,7 +57,7 @@ across many runs.
 | **Save Checkpoint** | Calls slam_toolbox's `/slam_toolbox/serialize_map` (the pose graph, resumable) without ending the run, and records the robot's current map pose (slam_toolbox's `/pose`) next to it as `<name>.pose.json`. |
 | **Save Final Map** | Calls `/slam_toolbox/save_map`: the `.pgm`/`.yaml` pair bringup races on. Not resumable. |
 | **x / y / yaw (rad)** | The robot's pose in the checkpoint's map, used when resuming. Filled in automatically from the pose recorded at Save Checkpoint (for the checkpoint in **Map name**); only edit it if the robot isn't back where it was when you saved. |
-| **Teleop** | Hold **W / S** to drive forward / back and **A / D** to turn left / right (combine for arcs), or hold the arrow buttons. The page sends commands every 100 ms while a key or button is held. |
+| **Teleop** | Hold **W / S** to drive forward / back and **A / D** to turn left / right in place, or **Q / E** to veer left / right: forward along a gentle 1 m-radius arc (at 0.3 m/s, ~2 s of holding changes direction by ~30 deg). Use Q/E instead of pivoting while mapping -- pivots jerk and smear the map. Or hold the arrow buttons. The page sends commands every 100 ms while a key or button is held. |
 | **linear / angular speed** | Teleop speed in m/s and rad/s (defaults 0.3 and 1.0). |
 | **Map** | The latest `/map`, reloaded every 2 s (blank until a map has been published). |
 | **Live: cmd_vel** | The latest `/cmd_vel` -- what `motor_node` is being told, from this page's teleop or from Nav2 -- with its age (orange once older than 2 s). |

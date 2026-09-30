@@ -223,10 +223,26 @@ class MotorNode(Node):
         v_left = v - w * self._track_width / 2.0
         v_right = v + w * self._track_width / 2.0
 
-        # Sides turning opposite ways = pivoting, which needs the higher floor
-        floor = self._min_turn_duty if v_left * v_right < 0 else self._min_duty
-        self._set_channel(self._chan_a, v_left / self._max_v, floor)
-        self._set_channel(self._chan_b, v_right / self._max_v, floor)
+        duty_l, duty_r = v_left / self._max_v, v_right / self._max_v
+        if v_left * v_right < 0:
+            # Sides turning opposite ways = pivoting, which needs the higher floor
+            self._set_channel(self._chan_a, duty_l, self._min_turn_duty)
+            self._set_channel(self._chan_b, duty_r, self._min_turn_duty)
+            return
+        # Driving straight or along an arc: lift BOTH sides together so the
+        # faster one reaches min_duty_cycle, keeping their ratio -- the ratio
+        # is the arc. Flooring each side separately turned every slow gentle
+        # arc into a straight line (e.g. 0.3 m/s teleop: 0.17 / 0.13 duty ->
+        # both 0.25), so the robot could only change direction by pivoting,
+        # which jerks and smears the map (2026-10-01).
+        big = max(abs(duty_l), abs(duty_r))
+        if 0.0 < big < self._min_duty:
+            scale = self._min_duty / big
+            duty_l, duty_r = duty_l * scale, duty_r * scale
+        # No per-side floor on top: the outer side is already >= min_duty,
+        # and the inner one must stay proportionally slower.
+        self._set_channel(self._chan_a, duty_l, 0.0)
+        self._set_channel(self._chan_b, duty_r, 0.0)
 
     def destroy_node(self) -> None:
         self._stop_all()

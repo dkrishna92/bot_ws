@@ -136,14 +136,44 @@ def test_pivot_in_place_uses_turn_floor(node):
     assert floors == [node._min_turn_duty, node._min_turn_duty]
 
 
-def test_straight_and_gentle_arc_use_normal_floor(node):
+def test_fast_arc_is_passed_through_unchanged(node):
     msg = Twist()
     msg.linear.x = 1.0
-    msg.angular.z = 0.5  # both sides still forward
+    msg.angular.z = 0.5  # both sides forward, both well above the floor
     node._on_cmd_vel(msg)
-    floors = _capture_floor(node)
+    calls = _capture_duty(node)
     node._tick()
-    assert floors == [node._min_duty, node._min_duty]
+    assert calls == pytest.approx([(1.0 - 0.5 * 0.16) / 2.0, (1.0 + 0.5 * 0.16) / 2.0])
+
+
+def _capture_both(node):
+    calls = []
+    node._set_channel = lambda chan, duty, min_duty=None: calls.append((duty, min_duty))
+    return calls
+
+
+def test_slow_gentle_arc_keeps_its_wheel_ratio(node):
+    """0.3 m/s with a 1 m radius (Q/E teleop): 0.126 / 0.174 duty. Flooring
+    each side to 0.25 would drive straight; scaling both keeps the arc."""
+    msg = Twist()
+    msg.linear.x = 0.3
+    msg.angular.z = 0.3
+    node._on_cmd_vel(msg)
+    calls = _capture_both(node)
+    node._tick()
+    (left, lf), (right, rf) = calls
+    assert right == pytest.approx(node._min_duty)             # outer side lifted to the floor
+    assert left / right == pytest.approx((0.3 - 0.048) / (0.3 + 0.048))  # same ratio as asked
+    assert lf == 0.0 and rf == 0.0                            # no per-side floor on top
+
+
+def test_slow_straight_still_reaches_the_floor(node):
+    msg = Twist()
+    msg.linear.x = 0.2
+    node._on_cmd_vel(msg)
+    calls = _capture_both(node)
+    node._tick()
+    assert [d for d, _ in calls] == pytest.approx([node._min_duty, node._min_duty])
 
 
 def test_small_pivot_duty_is_clamped_to_min_turn_duty_cycle(node, monkeypatch):

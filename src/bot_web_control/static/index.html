@@ -77,9 +77,10 @@
     </div>
 
     <div class="panel">
-      <div>Teleop -- WASD or buttons (w/s forward/back, a/d rotate)</div>
+      <div>Teleop -- W/S forward/back, A/D rotate in place, Q/E veer left/right
+        (forward along a gentle 1 m-radius arc -- smoother than pivoting while mapping)</div>
       <div class="dpad">
-        <div></div><button id="btnFwd">&#9650;</button><div></div>
+        <button id="btnArcLeft" title="Q: veer left">&#8598;</button><button id="btnFwd">&#9650;</button><button id="btnArcRight" title="E: veer right">&#8599;</button>
         <button id="btnLeft">&#9664;</button><button id="btnBack">&#9660;</button><button id="btnRight">&#9654;</button>
       </div>
       <label>linear speed: <span id="linVal"></span> m/s
@@ -124,13 +125,23 @@ linInput.addEventListener('input', () => { linSpeed = Number(linInput.value); re
 angInput.addEventListener('input', () => { angSpeed = Number(angInput.value); refreshSpeedLabels(); });
 
 const held = new Set();
+// Q/E radius: at 0.3 m/s this turns ~17 deg/s, so ~2 s of holding for a
+// 30 deg change of direction -- no pivot, both sides keep driving forward.
+const ARC_RADIUS_M = 1.0;
 function currentCmd() {
   let lin = 0, ang = 0;
   if (held.has('w')) lin += 1;
   if (held.has('s')) lin -= 1;
   if (held.has('a')) ang += 1;
   if (held.has('d')) ang -= 1;
-  return { linear: lin, angular: ang, linear_speed: linSpeed, angular_speed: angSpeed };
+  if (held.has('q') || held.has('e')) {
+    if (lin <= 0 && !held.has('s')) lin = 1;          // Q/E drive forward on their own
+    // angular fraction giving that radius at the current linear speed
+    const arc = Math.min(1, (linSpeed / ARC_RADIUS_M) / angSpeed);
+    if (held.has('q')) ang += arc;
+    if (held.has('e')) ang -= arc;
+  }
+  return { linear: lin, angular: Math.max(-1, Math.min(1, ang)), linear_speed: linSpeed, angular_speed: angSpeed };
 }
 function sendCmd() {
   const c = currentCmd();
@@ -154,7 +165,7 @@ function maybeStopTeleopLoop() {
   }
 }
 
-const KEY_MAP = { 'w': 'w', 'a': 'a', 's': 's', 'd': 'd' };
+const KEY_MAP = { 'w': 'w', 'a': 'a', 's': 's', 'd': 'd', 'q': 'q', 'e': 'e' };
 window.addEventListener('keydown', (e) => {
   const k = KEY_MAP[e.key.toLowerCase()];
   if (!k) return;
@@ -185,6 +196,8 @@ bindHoldButton('btnFwd', 'w');
 bindHoldButton('btnBack', 's');
 bindHoldButton('btnLeft', 'a');
 bindHoldButton('btnRight', 'd');
+bindHoldButton('btnArcLeft', 'q');
+bindHoldButton('btnArcRight', 'e');
 
 // Start / Stop / Mapping Run (new or resume) / Save (checkpoint or final).
 // Saved race maps for bringup ("map" first -- the launch's default).
