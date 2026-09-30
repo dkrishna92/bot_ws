@@ -55,12 +55,12 @@ class MotorNode(Node):
         # (16.8 V full, ~16.2 V under load): 0.75 keeps the average motor
         # voltage near 12 V on a full pack (2026-09-29, was 0.9 = ~15 V).
         self.declare_parameter("max_duty_cycle", 0.75)
-        # Deadband compensation -- see _set_channel's comment. Starting
-        # value, 2026-09-28: NOT yet empirically tuned against the real
-        # motors/chassis weight -- raise it if the motor still whines
-        # without turning at this floor, lower it if it now jumps/lurches
-        # on small commanded velocities.
-        self.declare_parameter("min_duty_cycle", 0.25)
+        # Deadband compensation -- see _set_channel's comment.
+        # drive_straight.py broke away at 28% (2026-09-30), so 0.30 (was
+        # 0.25, below breakaway: slow commands could leave it whining in
+        # place). Once rolling, 35% cruised 1.3 m/s, so this floor also
+        # makes ~1.1 m/s the slowest straight speed from these duties.
+        self.declare_parameter("min_duty_cycle", 0.30)
         # Higher floor used only while the two sides turn in opposite
         # directions (pivoting in place): skid-steer wheels have to scrub
         # sideways, which needs far more torque than rolling straight, and
@@ -73,7 +73,11 @@ class MotorNode(Node):
         self.declare_parameter("min_turn_duty_cycle", 0.66)
         self.declare_parameter("cmd_vel_timeout_s", 0.3)
         self.declare_parameter("track_width_m", 0.33)  # measured 2026-09-30 (was 0.32)
-        self.declare_parameter("max_linear_speed_mps", 2.0)
+        # Wheel speed at 100% duty (open loop: duty = v / this). Measured
+        # 2026-09-30 with drive_straight.py (tape-corrected cruise speeds):
+        # 1.31 m/s at 35%, 1.66 m/s at 50% -> least-squares 3.5 on a full
+        # pack. Was 2.0, which drove everything ~1.7x faster than commanded.
+        self.declare_parameter("max_linear_speed_mps", 3.5)
         # Pin map fixed by the Pololu Dual G2 for Raspberry Pi board (BCM GPIO
         # numbers): motor 1 = channel A = left, motor 2 = channel B = right.
         # FLT is the driver's open-drain fault output (low = fault), read here

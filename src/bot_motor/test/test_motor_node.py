@@ -61,12 +61,12 @@ def test_system_fault_forces_stop_even_with_fresh_cmd(node):
 
 def test_fresh_cmd_vel_drives_both_channels(node):
     msg = Twist()
-    msg.linear.x = 1.0
+    msg.linear.x = 2.0  # well above the duty floor
     msg.angular.z = 0.0
     node._on_cmd_vel(msg)
     calls = _capture_duty(node)
     node._tick()
-    assert calls == pytest.approx([0.5, 0.5])  # v / max_linear_speed_mps (2.0)
+    assert calls == pytest.approx([2.0 / node._max_v, 2.0 / node._max_v])  # v / max_linear_speed_mps
 
 
 def test_angular_velocity_differentiates_channels(node):
@@ -106,9 +106,9 @@ def _make_reachable(node, monkeypatch):
 def test_small_commanded_duty_is_clamped_to_min_duty_cycle(node, monkeypatch):
     fake = _make_reachable(node, monkeypatch)
 
-    node._set_channel(node._chan_a, 0.01)  # much smaller than min_duty_cycle (0.25 default)
+    node._set_channel(node._chan_a, 0.01)  # much smaller than min_duty_cycle
 
-    assert fake.tx_pwm_calls == [pytest.approx(25.0)]
+    assert fake.tx_pwm_calls == [pytest.approx(node._min_duty * 100.0)]
 
 
 def test_duty_above_min_duty_cycle_is_unaffected(node, monkeypatch):
@@ -138,13 +138,13 @@ def test_pivot_in_place_uses_turn_floor(node):
 
 def test_fast_arc_is_passed_through_unchanged(node):
     msg = Twist()
-    msg.linear.x = 1.0
+    msg.linear.x = 2.0
     msg.angular.z = 0.5  # both sides forward, both well above the floor
     node._on_cmd_vel(msg)
     calls = _capture_duty(node)
     node._tick()
     half = node._track_width / 2.0
-    assert calls == pytest.approx([(1.0 - 0.5 * half) / 2.0, (1.0 + 0.5 * half) / 2.0])
+    assert calls == pytest.approx([(2.0 - 0.5 * half) / node._max_v, (2.0 + 0.5 * half) / node._max_v])
 
 
 def _capture_both(node):

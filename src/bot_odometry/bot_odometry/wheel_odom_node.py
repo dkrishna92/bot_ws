@@ -35,8 +35,9 @@ Publishes:
     instead of three), so any future Nav2 range_sensor_layer config can
     reference them unchanged.
 
-wheel_radius_m/track_width_m below should stay numerically in sync with
-bot.urdf.xacro's wheel_radius/track_width properties. ticks_per_rev is the
+track_width_m below should stay in sync with bot.urdf.xacro's track_width;
+wheel_radius_m is the tape-calibrated rolling radius (the URDF has the
+nominal 0.06 the sim's DiffDrive uses). ticks_per_rev is the
 real encoder spec now (Pololu #4843: 48 CPR motor shaft x 20.4:1 gear ratio
 = 979.62 CPR gearbox output shaft). Encoder and ultrasonic trigger/echo
 pin assignment on the Teensy is confirmed (2026-09-27, see teensy_ws) --
@@ -72,7 +73,10 @@ class WheelOdomNode(Node):
         self.declare_parameter("serial_port", "/dev/ttyACM0")
         self.declare_parameter("baud", 115200)
         self.declare_parameter("ticks_per_rev", 979.62)
-        self.declare_parameter("wheel_radius_m", 0.06)
+        # Effective rolling radius: two ~3 m runs read 3.14 / 3.20 m on the
+        # encoders and ~3.25 m by tape (2026-09-30), so 0.06 x ~1.026. The
+        # URDF keeps the nominal 0.06.
+        self.declare_parameter("wheel_radius_m", 0.0615)
         self.declare_parameter("track_width_m", 0.33)  # measured 2026-09-30 (was 0.32)
 
         self._ticks_per_rev = self.get_parameter("ticks_per_rev").value
