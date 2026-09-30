@@ -934,6 +934,7 @@ def _start_node(monkeypatch, label):
     node = _make_node()
     pubs, destroyed = [], []
     node.create_publisher = lambda typ, topic, qos: pubs.append((topic, qos, _FakePublisher())) or pubs[-1][2]
+    _FakePublisher.get_subscription_count = lambda self: 0
     node.destroy_publisher = lambda pub: destroyed.append(pub)
     if label:
         node._proc, node._proc_label = _FakePopen(["x"]), label
@@ -946,16 +947,17 @@ def test_manual_start_refused_without_a_race_launch(monkeypatch):
     assert ok is False and not pubs
 
 
-def test_manual_start_publishes_latched_true_then_drops_it(monkeypatch):
-    import time as _time
+def test_manual_start_publishes_latched_true_until_stop(monkeypatch):
     from rclpy.qos import QoSDurabilityPolicy
     node, pubs, destroyed = _start_node(monkeypatch, "race (live map)")
-    monkeypatch.setattr(type(node), "MANUAL_START_HOLD_S", 0.05)
-    ok, _ = node.manual_start()
+    ok, msg = node.manual_start()
     topic, qos, pub = pubs[0]
     assert ok is True and topic == "start_signal" and pub.published[0].data is True
     assert qos.durability == QoSDurabilityPolicy.TRANSIENT_LOCAL  # lap_navigator subscribes latched
-    _time.sleep(0.2)
+    assert "isn't connected yet" in msg  # the fake publisher has no subscribers
+    assert destroyed == []  # held, not dropped on a timer
+    monkeypatch.setattr(node, "_cmd_pub", _FakePublisher())
+    node.stop_launch()
     assert destroyed == [pub]  # no latched True left for the next launch
 
 

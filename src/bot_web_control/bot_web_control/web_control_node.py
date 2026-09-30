@@ -1047,14 +1047,14 @@ class WebControlNode(Node):
 
     # ---- manual start ----------------------------------------------------
 
-    MANUAL_START_HOLD_S = 3.0
-
     def manual_start(self) -> tuple[bool, str]:
         """Publish start_signal=True like start_trigger_node does on the
         green light (latched: lap_navigator subscribes transient_local).
-        Rules: a manual start costs a 5 s penalty. The publisher is dropped
-        after MANUAL_START_HOLD_S -- a latched True left behind would start
-        the NEXT race launch the moment its lap_navigator subscribed."""
+        Rules: a manual start costs a 5 s penalty. The publisher stays up
+        until this launch ends (stop_launch / start_launch drop it) -- a
+        latched True left behind would start the NEXT launch on its own.
+        (It used to be dropped after 3 s: in a Plan B start on the loaded Pi
+        lap_navigator hadn't matched it by then and never got the start.)"""
         with self._lock:
             running = self._proc_label if (self._proc is not None and self._proc.poll() is None) else None
         if running not in ("bringup", "race (live map)"):
@@ -1065,20 +1065,19 @@ class WebControlNode(Node):
                          reliability=QoSReliabilityPolicy.RELIABLE)
         pub = self.create_publisher(Bool, "start_signal", qos)
         pub.publish(Bool(data=True))
-        timer = threading.Timer(self.MANUAL_START_HOLD_S, self._drop_start_publisher)
-        timer.daemon = True
         with self._lock:
-            self._start_pub, self._start_timer = pub, timer
-        timer.start()
+            self._start_pub = pub
         self.get_logger().warn("MANUAL START sent on start_signal (5 s penalty in a real race)")
+        listeners = pub.get_subscription_count()
+        if listeners == 0:
+            return True, ("start signal sent and held until Stop -- lap_navigator isn't connected yet "
+                          "(still starting?); it gets the start as soon as it connects")
         return True, "start signal sent -- lap_navigator should start the route now"
 
     def _drop_start_publisher(self) -> None:
         with self._lock:
-            pub, timer = getattr(self, "_start_pub", None), getattr(self, "_start_timer", None)
-            self._start_pub = self._start_timer = None
-        if timer is not None:
-            timer.cancel()
+            pub = getattr(self, "_start_pub", None)
+            self._start_pub = None
         if pub is not None:
             self.destroy_publisher(pub)
 
@@ -1144,6 +1143,7 @@ class WebControlNode(Node):
         # The recorder first, so the cleanup sweep below can't cut it off
         # mid-write.
         bag = self.stop_recording()
+        self._drop_start_publisher()
         with self._lock:
             proc, label = self._proc, self._proc_label
             self._proc = None
