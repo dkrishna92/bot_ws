@@ -111,6 +111,10 @@ Hard constraints from the rules doc:
   `LEFT_ENC_A_PIN`/etc; an earlier note here had the sides and A/B
   swapped). Read via the analog workaround until the dividers are fixed —
   see Open items.
+- Wheelbase (front-to-rear axle spacing) measured 0.216 m (2026-09-30; the
+  URDF had a 0.33 estimate). Track 0.32 m. A short wheelbase relative to
+  the track makes skid-steer pivots easier (less wheel scrub). Nav2's
+  footprint uses the chassis length, not the wheelbase, so it's unaffected.
 - Drive motors: Pololu #4843 (20.4:1 25D 12V HP gearmotor), one per wheel,
   paired 2-per-side onto the Pololu G2 driver's two channels (matches the
   DiffDrive plugin's per-side joint grouping above). Real spec (12V):
