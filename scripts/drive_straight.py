@@ -37,7 +37,8 @@ LOOP_HZ = 50
 MOVING_TICKS_PER_S = 150  # both wheels at least this fast = rolling (~0.06 m/s)
 RAMP_RATE = 15.0  # % duty per second while looking for breakaway
 MAX_BREAKAWAY_WAIT_S = 1.0
-RAMP_DOWN_M = 0.15
+RAMP_DOWN_M = 0.15  # slow down over at least this, or 0.5 s at cruise speed if longer
+BRAKE_S = 0.5  # hold PWM low with the driver awake (G2 brake mode) before it sleeps
 STALL_WINDOW_S = 0.5
 STALL_MIN_TICKS = 20  # a wheel moving fewer ticks than this per window after breakaway = stalled
 SETTLE_S = 0.7
@@ -76,6 +77,9 @@ def main():
     at_max_since = None
     duty_sum = {"left": 0.0, "right": 0.0}
     samples = 0
+    cruise_speeds = []  # m/s over the stall window while at cruise duty
+    speed = 0.0
+    dist = 0.0
     reason = "reached target distance"
     start = time.monotonic()
 
@@ -132,8 +136,13 @@ def main():
                         break
                     duty = max(breakaway, args.duty)
                     remaining = args.distance - dist
-                    if remaining < RAMP_DOWN_M:
-                        duty = breakaway + (duty - breakaway) * remaining / RAMP_DOWN_M
+                    if span > 0.2:
+                        speed = (moved_l + moved_r) / 2 * dl.M_PER_TICK / span
+                    ramp_m = max(RAMP_DOWN_M, 0.5 * speed)
+                    if remaining < ramp_m:
+                        duty = breakaway + (duty - breakaway) * remaining / ramp_m
+                    elif span >= STALL_WINDOW_S * 0.9:
+                        cruise_speeds.append(speed)
 
                 # Yawed left (yaw > 0): speed up left / slow right to turn back.
                 # Driving backwards the same wheel-speed difference turns the
@@ -153,10 +162,13 @@ def main():
             reason = "ABORTED: Ctrl-C"
         except RuntimeError as e:
             reason = f"ABORTED: {e}"
+        dist_at_stop = dist
+        motors.stop()
         fault_note = None
         if reason.startswith("ABORTED: motor driver fault"):
-            motors.stop()
             fault_note = motors.fault_follow_up()
+        else:
+            time.sleep(BRAKE_S)  # brake like motor_node does at zero cmd_vel, not coast
     elapsed = time.monotonic() - start
 
     time.sleep(SETTLE_S)
@@ -168,6 +180,7 @@ def main():
         print(f"  left wheel      {d_l:6.3f} m   ({sign * (left - l0):+d} ticks)")
         print(f"  right wheel     {d_r:6.3f} m   ({sign * (right - r0):+d} ticks)")
         print(f"  average         {(d_l + d_r) / 2:6.3f} m   (target {args.distance:.3f} m)")
+        print(f"  at motor stop   {dist_at_stop:6.3f} m   -> {(d_l + d_r) / 2 - dist_at_stop:.3f} m while braking")
     except RuntimeError as e:
         print(f"  (no final encoder reading: {e})")
     print(f"  heading change  {yaw:+6.1f} deg (IMU, + = turned left)")
@@ -178,6 +191,11 @@ def main():
         avg_l, avg_r = duty_sum["left"] / samples, duty_sum["right"] / samples
         print(f"  average duty    left {avg_l:.1f}%  right {avg_r:.1f}%"
               + ("  (open loop)" if args.open_loop else ""))
+    if cruise_speeds:
+        cruise = sorted(cruise_speeds)[len(cruise_speeds) // 2]
+        cruise_duty = max(breakaway, args.duty)
+        print(f"  cruise speed    {cruise:6.2f} m/s at {cruise_duty:.0f}% duty "
+              f"(motor_node max_linear_speed_mps {cruise / (cruise_duty / 100):.1f} if linear)")
     print("  Distances assume no wheel slip -- check against a tape measure.")
     if fault_note:
         print(f"  driver fault: {fault_note}")
