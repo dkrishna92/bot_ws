@@ -170,6 +170,13 @@
   </div>
 
 <script>
+// Keep Map name across page reloads: Resume and the auto checkpoint names
+// hang off it, and a blank field silently means 'map'.
+(() => {
+  const f = document.getElementById('mapName');
+  try { f.value = localStorage.getItem('mapName') || ''; } catch (e) {}
+  f.addEventListener('change', () => { try { localStorage.setItem('mapName', f.value.trim()); } catch (e) {} });
+})();
 let linSpeed = 0.3, angSpeed = 1.0;
 const linInput = document.getElementById('linSpeed');
 const angInput = document.getElementById('angSpeed');

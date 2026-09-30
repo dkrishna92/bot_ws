@@ -343,8 +343,7 @@ class WebControlNode(Node):
                     resume = bool(body.get("resume", False))
                     ckpt = node.pick_checkpoint(body.get("name"), body.get("base"), saving=False)
                     if resume and ckpt is None and body.get("base") is not None:
-                        self._send_json({"ok": False, "message":
-                                         f"no checkpoint saved yet for '{body.get('base') or 'map'}' -- nothing to resume"})
+                        self._send_json({"ok": False, "message": node.no_checkpoint_message(body.get("base"))})
                         return
                     ok, msg = node.start_launch(
                         "mapping",
@@ -528,6 +527,18 @@ class WebControlNode(Node):
         numbers = [int(m.group(1)) for n in self.list_checkpoints() if (m := pattern.match(n))]
         return {"next": f"{base}_{max(numbers, default=0) + 1}",
                 "latest": f"{base}_{max(numbers)}" if numbers else None}
+
+    def no_checkpoint_message(self, base: str | None) -> str:
+        """Resume found no <base>_N checkpoint: say what it looked for and
+        what IS saved (a blank Map name means 'map', so a checkpoint saved
+        as desk_1 is invisible until Map name is 'desk')."""
+        base = (base or "").strip() or "map"
+        saved = self.list_checkpoints()
+        if not saved:
+            return f"no checkpoints saved at all -- nothing to resume (looked for {base}_1, {base}_2, ...)"
+        return (f"no checkpoint named {base}_1, {base}_2, ... (Map name is '{base}'). Saved, newest first: "
+                f"{', '.join(saved[:6])}. Set Map name to the part before _N (e.g. '{saved[0].rsplit('_', 1)[0]}') "
+                f"or type the full name in Checkpoint name.")
 
     def pick_checkpoint(self, name: str | None, base: str | None, saving: bool) -> str | None:
         """An explicit checkpoint name wins; otherwise, when a map name is
@@ -776,17 +787,20 @@ class WebControlNode(Node):
         # the robot's pose in the checkpoint's map frame (map_start_pose),
         # which isn't readable back out of the serialized pose graph. Leave
         # the robot here (or put it back) and Resume uses this pose.
-        pose = self._latest_pose
-        if pose is None or time.monotonic() - pose[3] > 5.0:
-            return True, (f"saved checkpoint '{path}' -- but no recent slam pose to record, "
+        # slam_toolbox's /pose only updates while the robot moves, so a save
+        # after stopping needs the TF fallback (found 2026-09-30: every save
+        # made at rest recorded nothing and resumed at 0,0,0).
+        pose = self._current_map_pose()
+        if pose is None:
+            return True, (f"saved checkpoint '{path}' -- but no current slam pose to record, "
                           "so enter the resume pose by hand")
         try:
             with open(self._ws_path(path) + ".pose.json", "w") as f:
-                json.dump({"x": round(pose[0], 3), "y": round(pose[1], 3), "yaw": round(pose[2], 3)}, f)
+                json.dump({k: round(pose[k], 3) for k in ("x", "y", "yaw")}, f)
         except OSError as exc:
             return True, f"saved checkpoint '{path}' -- but couldn't record the pose ({exc})"
-        return True, (f"saved checkpoint '{path}' at pose x={pose[0]:.2f} y={pose[1]:.2f} "
-                      f"yaw={pose[2]:.2f} -- Resume will start from there")
+        return True, (f"saved checkpoint '{path}' at pose x={pose['x']:.2f} y={pose['y']:.2f} "
+                      f"yaw={pose['yaw']:.2f} -- Resume will start from there")
 
     def save_final_map(self, name: str | None):
         """Export the current map via slam_toolbox's save_map service --

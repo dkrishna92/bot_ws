@@ -313,6 +313,7 @@ def test_save_checkpoint_uses_checkpoint_path_by_default():
     node = _make_node()
     node._checkpoint_path = "src/bot_bringup/config/maps/checkpoint"
     node._serialize_client = _FakeSerializeClient()
+    node._current_map_pose = lambda timeout=2.0: None  # no TF in a unit test
 
     ok, msg = node.save_checkpoint(None)
 
@@ -324,6 +325,7 @@ def test_save_checkpoint_uses_checkpoint_path_by_default():
 def test_save_checkpoint_resolves_bare_name_under_maps_dir():
     node = _make_node()
     node._serialize_client = _FakeSerializeClient()
+    node._current_map_pose = lambda timeout=2.0: None  # no TF in a unit test
 
     ok, msg = node.save_checkpoint("my_custom_checkpoint")
 
@@ -535,8 +537,9 @@ def test_save_checkpoint_records_the_slam_pose_for_resume(tmp_path):
     assert node.checkpoint_pose(None) is None  # default checkpoint has no record
 
 
-def test_save_checkpoint_without_a_recent_pose_says_so(tmp_path):
+def test_save_checkpoint_without_a_recent_pose_says_so(tmp_path, monkeypatch):
     node = _checkpoint_node(tmp_path)
+    monkeypatch.setattr(node, "_current_map_pose", lambda timeout=2.0: None)  # no TF either
 
     ok, msg = node.save_checkpoint("lap1")
 
@@ -844,6 +847,23 @@ def test_pick_checkpoint_explicit_name_wins(tmp_path):
     assert node.pick_checkpoint("", "speed", saving=True) == "speed_3"
     assert node.pick_checkpoint(None, "speed", saving=False) == "speed_2"
     assert node.pick_checkpoint(None, None, saving=True) is None  # legacy default checkpoint
+
+
+def test_save_checkpoint_at_rest_records_the_tf_pose(tmp_path, monkeypatch):
+    """/pose goes stale once the robot stops; the save must still record where it is."""
+    node = _checkpoint_node(tmp_path)
+    node._latest_pose = (9.0, 9.0, 0.0, 0.0)  # ancient
+    monkeypatch.setattr(node, "_current_map_pose",
+                        lambda timeout=2.0: {"x": 3.0, "y": -1.5, "yaw": 0.25, "source": "tf", "age_s": 0.0})
+    ok, msg = node.save_checkpoint("desk_1")
+    assert ok is True and "x=3.00" in msg
+    assert node.checkpoint_pose("desk_1") == {"x": 3.0, "y": -1.5, "yaw": 0.25}
+
+
+def test_no_checkpoint_message_names_what_is_saved(tmp_path):
+    node = _ckpt_node(tmp_path, ["desk_1"])
+    msg = node.no_checkpoint_message("")
+    assert "map_1" in msg and "desk_1" in msg and "'desk'" in msg
 
 
 def test_starting_a_launch_clears_the_previous_map(tmp_path, monkeypatch):
