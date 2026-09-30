@@ -302,16 +302,6 @@ Laptop-first, Pi 5 for final integration:
 
 ## Open items / things not yet resolved
 
-- **E-STOP WIRELESS DEADMAN IS OVERRIDDEN (2026-09-30, temporary, on
-  request):** the Nano runs `arduino_ws` with `ESTOP_OVERRIDE 1` -- relay
-  energized from power-on and on heartbeat loss; only an explicit `X` from
-  the kill switch (while its link works) cuts it. LED: short flash each
-  second = overridden and live. The rules require the <1 s cutoff on
-  signal loss: before any counted run, reflash the normal firmware from
-  the Pi: `~/.platformio/packages/tool-dfuutil-arduino/dfu-util -d
-  0x2341:0x0070 -Q -D ~/estop_fw_normal.bin` (or rebuild with
-  `-DESTOP_OVERRIDE=0`).
-
 - Course layout / obstacle geometry: official SharePoint resources still
   inaccessible, but a teammate (D Turner) imported CFR speed/obstacle course
   geometry into Gazebo world files (`bot_gazebo/worlds/*_cfr.world`) from
