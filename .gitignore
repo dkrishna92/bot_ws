@@ -32,3 +32,4 @@ scripts/exploration_results/
 
 # Third-party lidar driver, fetched by scripts/setup_pi.sh (not apt-packaged)
 src/sllidar_ros2/
+runs/
