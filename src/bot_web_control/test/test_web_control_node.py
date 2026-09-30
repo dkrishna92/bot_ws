@@ -45,6 +45,11 @@ def _make_node(linear_speed=0.3, angular_speed=1.0):
     node._map_save_path = "src/bot_bringup/config/maps/map"
     node._cmd_pub = _FakePublisher()
     node._latest_pose = None
+    node._latest_cmd = None
+    node._latest_amcl = None
+    node._watch_lock = threading.Lock()
+    node._watched = {}
+    node._reader_blocklist = ["/oak/", "/scan"]
     # __new__ skips Node.__init__, so there's no real logger to return.
     node.get_logger = lambda: _FakeLogger()
     return node
@@ -580,3 +585,219 @@ def test_slam_pose_yaw_from_quaternion():
     node._on_slam_pose(msg)
 
     assert node._latest_pose[:3] == pytest.approx((1.5, -0.5, 1.2))
+
+
+def test_status_reports_live_cmd_vel_and_newest_pose():
+    import time as _time
+    node = _make_node()
+    now = _time.monotonic()
+    node._latest_cmd = (0.3, -0.5, now)
+    node._latest_pose = (1.0, 2.0, 0.1, now - 3.0)  # slam, older
+    node._latest_amcl = (4.0, 5.0, 0.2, now - 0.5)  # amcl, newer
+    st = node.status()
+    assert st["cmd_vel"]["linear"] == 0.3 and st["cmd_vel"]["angular"] == -0.5
+    assert st["pose"]["source"] == "amcl" and st["pose"]["x"] == 4.0
+
+
+def test_status_live_fields_are_null_before_any_data():
+    st = _make_node().status()
+    assert st["cmd_vel"] is None and st["pose"] is None
+
+
+def test_read_topic_unknown_topic_reports_error():
+    node = _make_node()
+    node.get_topic_names_and_types = lambda: [("/scan", ["sensor_msgs/msg/LaserScan"])]
+    assert "no such topic" in node.read_topic("/nope")["error"]
+
+
+def test_read_topic_subscribes_once_and_reports_latest_message():
+    from std_msgs.msg import String as StringMsg
+    node = _make_node()
+    node.get_topic_names_and_types = lambda: [("/chatter", ["std_msgs/msg/String"])]
+    node.get_publishers_info_by_topic = lambda name: []
+    subs = []
+    node.create_subscription = lambda cls, name, cb, qos: subs.append((cls, name, cb)) or object()
+
+    first = node.read_topic("chatter")
+    assert first["type"] == "std_msgs/msg/String" and first["message"] is None
+    subs[0][2](StringMsg(data="hello"))
+    second = node.read_topic("/chatter")
+
+    assert len(subs) == 1  # reused, not re-subscribed
+    assert second["message"] == {"data": "hello"}
+    assert second["age_s"] is not None
+
+
+def test_reader_blocks_oak_and_lidar_topics_but_not_lookalikes():
+    node = _make_node()
+    node.get_topic_names_and_types = lambda: [
+        ("/oak/rgb/image_raw", ["sensor_msgs/msg/Image"]), ("/oak/points", ["sensor_msgs/msg/PointCloud2"]),
+        ("/scan", ["sensor_msgs/msg/LaserScan"]), ("/scan_filtered", ["sensor_msgs/msg/LaserScan"]),
+        ("/odom", ["nav_msgs/msg/Odometry"])]
+
+    assert [t["name"] for t in node.list_topics()] == ["/odom", "/scan_filtered"]
+    for blocked in ("/oak/rgb/image_raw", "oak/points", "/scan"):
+        assert "blocked" in node.read_topic(blocked)["error"]
+
+
+_SLAM_BASE = """slam_toolbox:
+  ros__parameters:
+    odom_frame: odom
+    do_loop_closing: true
+    minimum_time_interval: 0.5
+    throttle_scans: 1
+    angle_variance_penalty: 1.0
+"""
+
+
+def _slam_node(tmp_path, monkeypatch):
+    share = tmp_path / "share"
+    (share / "config").mkdir(parents=True)
+    (share / "config" / "slam_toolbox_params.yaml").write_text(_SLAM_BASE)
+    monkeypatch.setattr("ament_index_python.packages.get_package_share_directory", lambda pkg: str(share))
+    (tmp_path / "src" / "bot_bringup" / "config").mkdir(parents=True)
+    node = _make_node()
+    node._workspace_root = str(tmp_path)
+    return node
+
+
+def test_slam_params_lists_key_params_first_and_hides_fixed_ones(tmp_path, monkeypatch):
+    node = _slam_node(tmp_path, monkeypatch)
+    names = [p["name"] for p in node.slam_params()["params"]]
+    assert names[:3] == ["minimum_time_interval", "angle_variance_penalty", "do_loop_closing"]
+    assert "odom_frame" not in names and "throttle_scans" in names
+
+
+def test_set_slam_params_saves_only_changes_and_mapping_loads_them(tmp_path, monkeypatch):
+    import yaml
+    node = _slam_node(tmp_path, monkeypatch)
+
+    ok, msg = node.set_slam_params({"minimum_time_interval": "0.1", "do_loop_closing": "false",
+                                    "angle_variance_penalty": "1.0", "throttle_scans": "1"})
+
+    assert ok is True, msg
+    saved = yaml.safe_load((tmp_path / "src/bot_bringup/config/slam_toolbox_overrides.yaml").read_text())
+    assert saved == {"slam_toolbox": {"ros__parameters": {"minimum_time_interval": 0.1, "do_loop_closing": False}}}
+    params = {p["name"]: p for p in node.slam_params()["params"]}
+    assert params["minimum_time_interval"]["value"] == 0.1 and params["minimum_time_interval"]["overridden"]
+
+    captured = {}
+    monkeypatch.setattr("bot_web_control.web_control_node.subprocess.Popen",
+                        lambda cmd, **kw: _FakePopen(captured.setdefault("cmd", cmd), **kw))
+    node.start_launch("mapping")
+    assert any(a.startswith("slam_params_overrides:=") and a.endswith("slam_toolbox_overrides.yaml")
+               for a in captured["cmd"])
+
+
+def test_set_slam_params_rejects_bad_values_and_fixed_params(tmp_path, monkeypatch):
+    node = _slam_node(tmp_path, monkeypatch)
+    assert node.set_slam_params({"throttle_scans": "0.5"})[0] is False
+    assert node.set_slam_params({"odom_frame": "x"})[0] is False
+    assert node.set_slam_params({"not_a_param": 1})[0] is False
+
+
+def test_reset_removes_overrides_and_mapping_launches_without_them(tmp_path, monkeypatch):
+    node = _slam_node(tmp_path, monkeypatch)
+    node.set_slam_params({"minimum_time_interval": 0.2})
+    ok, _ = node.set_slam_params({})
+    assert ok is True
+    assert not (tmp_path / "src/bot_bringup/config/slam_toolbox_overrides.yaml").exists()
+    captured = {}
+    monkeypatch.setattr("bot_web_control.web_control_node.subprocess.Popen",
+                        lambda cmd, **kw: _FakePopen(captured.setdefault("cmd", cmd), **kw))
+    node.start_launch("mapping")
+    assert not any(a.startswith("slam_params_overrides:=") for a in captured["cmd"])
+
+
+def _route_node(tmp_path):
+    import time as _time
+    node = _make_node()
+    node._workspace_root = str(tmp_path)
+    (tmp_path / "src" / "bot_bringup" / "config" / "maps").mkdir(parents=True)
+    node._latest_pose = (1.0, 2.0, 0.0, _time.monotonic())
+    return node
+
+
+def test_route_checkpoints_add_undo_clear(tmp_path):
+    import time as _time
+    node = _route_node(tmp_path)
+    assert node.add_route_checkpoint("speed")[0] is True
+    node._latest_pose = (4.5, -1.25, 0.0, _time.monotonic())
+    ok, msg = node.add_route_checkpoint("speed")
+    assert ok and "checkpoint 2" in msg
+    info = node.route_info("speed")
+    assert info["file"] == "speed.route.yaml" and info["checkpoints"] == [[1.0, 2.0], [4.5, -1.25]]
+
+    assert node.undo_route_checkpoint("speed")[0] is True
+    assert node.route_info("speed")["checkpoints"] == [[1.0, 2.0]]
+    assert node.clear_route("speed")[0] is True
+    assert node.route_info("speed")["checkpoints"] == []
+
+
+def test_route_checkpoint_needs_a_current_pose(tmp_path, monkeypatch):
+    node = _route_node(tmp_path)
+    node._latest_pose = None
+    monkeypatch.setattr(node, "_current_map_pose", lambda timeout=2.0: None)  # no TF either
+    ok, msg = node.add_route_checkpoint("speed")
+    assert ok is False and "no current map pose" in msg
+
+
+def test_stale_topic_pose_falls_back_to_tf(tmp_path, monkeypatch):
+    node = _route_node(tmp_path)
+    node._latest_pose = (9.0, 9.0, 0.0, 0.0)  # ancient
+    monkeypatch.setattr(node, "_current_map_pose",
+                        lambda timeout=2.0: {"x": 3.0, "y": 4.0, "yaw": 0.5, "source": "tf", "age_s": 0.0})
+    assert node.add_route_checkpoint("speed")[0] is True
+    assert node.route_info("speed")["checkpoints"] == [[3.0, 4.0]]
+
+
+def test_set_start_pose_writes_the_maps_start_file(tmp_path):
+    import yaml
+    node = _route_node(tmp_path)
+    ok, msg = node.set_start_pose("speed")
+    assert ok is True, msg
+    saved = yaml.safe_load((tmp_path / "src/bot_bringup/config/maps/speed.start.yaml").read_text())
+    assert saved == {"x": 1.0, "y": 2.0, "yaw": 0.0}
+    assert node.route_info("speed")["start_pose"] == saved
+
+
+def test_route_file_is_readable_by_lap_navigator(tmp_path):
+    from bot_navigation.lap_navigator_node import load_route_file
+    node = _route_node(tmp_path)
+    node.add_route_checkpoint("speed")
+    points, laps = load_route_file(str(tmp_path / "src/bot_bringup/config/maps/speed.route.yaml"))
+    assert points == [(1.0, 2.0)] and laps == 0
+
+
+def test_race_mode_launches_mapping_with_route_and_speed_caps(tmp_path, monkeypatch):
+    node = _route_node(tmp_path)
+    node.add_route_checkpoint("speed")
+    captured = {}
+    monkeypatch.setattr("bot_web_control.web_control_node.subprocess.Popen",
+                        lambda cmd, **kw: _FakePopen(captured.setdefault("cmd", cmd), **kw))
+
+    ok, msg = node.start_launch("mapping", race=True, map_name="speed", max_speed=0.5, max_turn="1.0")
+
+    assert ok is True, msg
+    cmd = captured["cmd"]
+    assert "mapping.launch.py" in cmd and "race:=true" in cmd and "teleop:=true" not in cmd
+    assert f"route:={tmp_path / 'src/bot_bringup/config/maps/speed.route.yaml'}" in cmd
+    assert "max_speed:=0.5" in cmd and "max_turn:=1.0" in cmd
+    assert node._proc_label == "race (live map)"
+
+
+def test_race_mode_refuses_without_a_recorded_route(tmp_path, monkeypatch):
+    node = _route_node(tmp_path)
+    monkeypatch.setattr("bot_web_control.web_control_node.subprocess.Popen",
+                        lambda cmd, **kw: pytest.fail("must not launch"))
+    ok, msg = node.start_launch("mapping", race=True, map_name="speed")
+    assert ok is False and "no recorded route" in msg
+
+
+def test_speed_caps_not_passed_to_teleop_mapping(tmp_path, monkeypatch):
+    node = _route_node(tmp_path)
+    captured = {}
+    monkeypatch.setattr("bot_web_control.web_control_node.subprocess.Popen",
+                        lambda cmd, **kw: _FakePopen(captured.setdefault("cmd", cmd), **kw))
+    node.start_launch("mapping", max_speed=0.5)
+    assert not any(a.startswith("max_speed:=") for a in captured["cmd"])

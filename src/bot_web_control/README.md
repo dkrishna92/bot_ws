@@ -50,6 +50,7 @@ across many runs.
 | **Start New Mapping Run** | Runs `mapping.launch.py teleop:=true`: SLAM builds a map from scratch while you drive with the teleop controls. |
 | **Resume Mapping Run** | Same, but continues from the checkpoint named in **Map name** (default `checkpoint`), starting at the pose in x / y / yaw. |
 | **Nav2** (next to Start) / **Nav2 for autonomous mapping** | Which Nav2 params variant to launch with (`nav2_params_file:=`): the `nav2_params*.yaml` / `nav2_mapping_params*.yaml` files installed with `bot_bringup`, default first (e.g. `_mppi` for the MPPI controller). Teleop mapping runs no Nav2, so it ignores the mapping choice. A new variant file needs a `colcon build` before it shows up. |
+| **SLAM settings** | Every slam_toolbox parameter (except frame/topic wiring), heading-related ones first with hints. **Save** writes the changes to `src/bot_bringup/config/slam_toolbox_overrides.yaml`, which every mapping start then loads on top of `slam_toolbox_params.yaml` (`slam_params_overrides:=`); **Reset** deletes it. Takes effect at the next mapping start, not in a running one. |
 | **Start Autonomous Mapping Run** | Runs `mapping.launch.py` without `teleop:=true`: Nav2 and `bot_explore`'s frontier explorer drive the robot into unexplored space on their own while SLAM builds the map (always a fresh map). Asks for confirmation first. Heavier than teleop mapping, since it runs the full Nav2 stack. |
 | **Stop** | Sends Ctrl-C (SIGINT) to the running launch, force-kills it after 5 s, publishes a zero `/cmd_vel`, and, if `workspace_root` is set, runs `clean_robot.sh` (robot) or `clean_sim.sh` (sim) to catch leftover processes. It passes `--keep-dashboard`, so the dashboard itself keeps running. |
 | **Map name** | Optional bare name for saves and for which checkpoint Resume uses; blank = the defaults (`checkpoint` / `map`). |
@@ -59,6 +60,9 @@ across many runs.
 | **Teleop** | Hold **W / S** to drive forward / back and **A / D** to turn left / right (combine for arcs), or hold the arrow buttons. The page sends commands every 100 ms while a key or button is held. |
 | **linear / angular speed** | Teleop speed in m/s and rad/s (defaults 0.3 and 1.0). |
 | **Map** | The latest `/map`, reloaded every 2 s (blank until a map has been published). |
+| **Live: cmd_vel** | The latest `/cmd_vel` -- what `motor_node` is being told, from this page's teleop or from Nav2 -- with its age (orange once older than 2 s). |
+| **Live: pose** | The robot's map pose from slam_toolbox's `/pose` (mapping) or AMCL's `/amcl_pose` (racing), whichever is newer, with its source and age. |
+| **Read a topic** | Pick any topic (the list fills from what's running) and **Read**: shows its type, rate, age and the latest message, refreshed every second, until **Stop**. Subscribes on demand with QoS matched to the publishers (best-effort sensor topics and latched topics both work), at most 3 topics at once, each dropped 10 s after the page stops reading it. Long arrays are cut to 16 items. The OAK-D's `/oak/...` topics and the lidar's `/scan` are blocked (too heavy to decode on the Pi) -- see `topic_reader_blocklist`. |
 
 ## How teleop stops
 
@@ -104,6 +108,7 @@ the defaults shown.
 | `default_angular_speed` | `1.0` | Initial teleop angular speed (rad/s). |
 | `checkpoint_path` | `src/bot_bringup/config/maps/checkpoint` | Default checkpoint (blank Map name), relative to the workspace root. |
 | `slam_pose_topic` | `/pose` | slam_toolbox's robot pose in the map frame, recorded at Save Checkpoint. |
+| `topic_reader_blocklist` | `["/oak/", "/scan"]` | Topics the reader refuses: exact names, or prefixes ending in `/`. |
 
 ## HTTP API
 
@@ -113,7 +118,11 @@ The page is a thin client over these endpoints; `curl` works too, e.g.
 | Method | Path | Body / response |
 | --- | --- | --- |
 | GET | `/` | The dashboard page. |
-| GET | `/api/status` | JSON: `running` (`"bringup"`, `"mapping"` or `null`), `map_available`, `linear_speed`, `angular_speed`. |
+| GET | `/api/status` | JSON: `running` (`"bringup"`, `"mapping"` or `null`), `map_available`, `linear_speed`, `angular_speed`, `cmd_vel` (`linear`, `angular`, `age_s`) and `pose` (`x`, `y`, `yaw`, `source`, `age_s`), each `null` until seen. |
+| GET | `/api/slam_params` | JSON: `params`, each `name`, `default`, `value`, `overridden`, `key`, `hint`. |
+| POST | `/api/slam_params` | `{"values": {name: value}}` to save (only changes are kept), `{"reset": true}` for defaults. |
+| GET | `/api/topics` | JSON: `topics`, every topic's `name` and `type`. |
+| GET | `/api/topic?name=<topic>` | JSON: `type`, `rate_hz`, `age_s` and `message` (latest, arrays truncated), or `error`. |
 | GET | `/api/map.png` | Latest `/map` as a PNG; 503 if no map has arrived yet. |
 | POST | `/api/cmd_vel` | `{"linear": m/s, "angular": rad/s}`, published as `/cmd_vel` (resets the 0.5 s staleness timer). |
 | GET | `/api/maps` | JSON: `maps`, the saved race map names. |

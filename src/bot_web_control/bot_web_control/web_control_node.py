@@ -82,6 +82,7 @@ Usage:
 """
 from __future__ import annotations
 
+import collections
 import json
 import math
 import os
@@ -95,9 +96,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
 import rclpy
+import rclpy.time
+import yaml
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile
+from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from nav_msgs.msg import OccupancyGrid
 from std_msgs.msg import String
@@ -110,6 +113,32 @@ SAVE_MAP_TIMEOUT_S = 10.0
 # WebControlNode._resolve_map_name), so saving under a new name never
 # writes outside this directory.
 MAPS_DIR = "src/bot_bringup/config/maps"
+# Topic reader: at most this many topics subscribed at once, each dropped
+# this long after the page stops polling it.
+# SLAM settings: dashboard edits to slam_toolbox's params, saved here
+# (workspace-relative) and loaded by mapping.launch.py on top of
+# config/slam_toolbox_params.yaml (slam_params_overrides:=).
+SLAM_OVERRIDES = "src/bot_bringup/config/slam_toolbox_overrides.yaml"
+# Not editable: wiring that has to match the rest of the stack.
+SLAM_FIXED_PARAMS = {"odom_frame", "map_frame", "base_frame", "scan_topic", "mode",
+                     "solver_plugin", "stack_size_to_use", "use_map_saver"}
+# Shown first, with hints: the ones that matter when the map's heading goes
+# wrong (lanes drawn rotated / in the wrong direction).
+SLAM_KEY_PARAMS = {
+    "minimum_time_interval": "Seconds between processed scans. Lower = more scans while turning (more CPU).",
+    "minimum_travel_heading": "Radians of turn that triggers processing a scan.",
+    "minimum_travel_distance": "Metres of travel that triggers processing a scan.",
+    "coarse_search_angle_offset": "Radians the scan matcher searches around the odometry heading (0.349 = +-20 deg).",
+    "angle_variance_penalty": "Higher = trust odometry (IMU) heading more, scan-matcher rotations less.",
+    "distance_variance_penalty": "Higher = trust odometry distance more.",
+    "correlation_search_space_dimension": "Metres the matcher searches around the odometry position.",
+    "do_loop_closing": "Repeated identical lanes can cause false loop closures -- try false to test.",
+    "loop_match_minimum_response_fine": "Higher = stricter loop closures (fewer false ones).",
+    "loop_search_maximum_distance": "Metres to look for loop closures.",
+    "max_laser_range": "Metres of lidar used for the map.",
+}
+MAX_WATCHED_TOPICS = 3
+WATCH_EXPIRY_S = 10.0
 
 
 def _png_chunk(tag: bytes, data: bytes) -> bytes:
@@ -170,6 +199,11 @@ class WebControlNode(Node):
         # one next to the checkpoint so Resume can reuse it -- see
         # save_checkpoint.
         self.declare_parameter("slam_pose_topic", "/pose")
+        # Topic reader can't open these (exact names, or prefixes ending in
+        # '/'): big high-rate sensor streams that Python would have to decode
+        # in full at camera/lidar rate on the Pi -- the OAK-D's image, depth,
+        # point cloud and IMU topics and the RPLIDAR's scan.
+        self.declare_parameter("topic_reader_blocklist", ["/oak/", "/scan"])
 
         self._linear_speed = self.get_parameter("default_linear_speed").value
         self._angular_speed = self.get_parameter("default_angular_speed").value
@@ -203,6 +237,19 @@ class WebControlNode(Node):
         self._latest_pose: tuple[float, float, float, float] | None = None  # x, y, yaw, monotonic time
         self.create_subscription(PoseWithCovarianceStamped, self.get_parameter("slam_pose_topic").value,
                                  self._on_slam_pose, 10)
+        # Live readouts for the page: what the motors are being told (from
+        # this page's teleop or from Nav2), and AMCL's map pose while racing
+        # (slam_toolbox's /pose above covers mapping).
+        self._latest_cmd: tuple[float, float, float] | None = None  # linear, angular, monotonic time
+        self._latest_amcl: tuple[float, float, float, float] | None = None
+        self.create_subscription(Twist, "cmd_vel", self._on_cmd_vel, 10)
+        self.create_subscription(PoseWithCovarianceStamped, "amcl_pose", self._on_amcl_pose, 10)
+        # Topic reader: topics the page is viewing, subscribed on demand and
+        # dropped WATCH_EXPIRY_S after the page stops polling them.
+        self._watch_lock = threading.Lock()
+        self._watched: dict[str, dict] = {}
+        self._reader_blocklist = list(self.get_parameter("topic_reader_blocklist").value)
+        self.create_timer(2.0, self._expire_watched)
         self.create_timer(0.1, self._teleop_watchdog_tick)
 
         node = self
@@ -240,6 +287,18 @@ class WebControlNode(Node):
                     self.send_header("Cache-Control", "no-store")
                     self.end_headers()
                     self.wfile.write(png)
+                elif self.path.startswith("/api/route"):
+                    from urllib.parse import parse_qs, urlparse
+                    name = (parse_qs(urlparse(self.path).query).get("name") or [""])[0]
+                    self._send_json(node.route_info(name))
+                elif self.path.startswith("/api/slam_params"):
+                    self._send_json(node.slam_params())
+                elif self.path.startswith("/api/topics"):
+                    self._send_json({"topics": node.list_topics()})
+                elif self.path.startswith("/api/topic?") or self.path == "/api/topic":
+                    from urllib.parse import parse_qs, urlparse
+                    name = (parse_qs(urlparse(self.path).query).get("name") or [""])[0]
+                    self._send_json(node.read_topic(name) if name.strip("/ ") else {"error": "no topic name"})
                 elif self.path.startswith("/api/checkpoint_pose"):
                     from urllib.parse import parse_qs, urlparse
                     name = (parse_qs(urlparse(self.path).query).get("name") or [""])[0]
@@ -269,7 +328,8 @@ class WebControlNode(Node):
                 elif self.path == "/api/launch/bringup":
                     body = self._read_json()
                     ok, msg = node.start_launch("bringup", map_name=body.get("map"),
-                                                nav2_params=body.get("nav2_params"))
+                                                nav2_params=body.get("nav2_params"),
+                                                max_speed=body.get("max_speed"), max_turn=body.get("max_turn"))
                     self._send_json({"ok": ok, "message": msg})
                 elif self.path == "/api/launch/mapping":
                     body = self._read_json()
@@ -280,7 +340,21 @@ class WebControlNode(Node):
                         checkpoint_name=body.get("name"),
                         autonomous=bool(body.get("autonomous", False)),
                         nav2_params=body.get("nav2_params"),
+                        race=bool(body.get("race", False)),
+                        map_name=body.get("route_name"),
+                        max_speed=body.get("max_speed"),
+                        max_turn=body.get("max_turn"),
                     )
+                    self._send_json({"ok": ok, "message": msg})
+                elif self.path in ("/api/route/add", "/api/route/undo", "/api/route/clear", "/api/route/start"):
+                    name = self._read_json().get("name")
+                    action = {"add": node.add_route_checkpoint, "undo": node.undo_route_checkpoint,
+                              "clear": node.clear_route, "start": node.set_start_pose}[self.path.rsplit("/", 1)[1]]
+                    ok, msg = action(name)
+                    self._send_json({"ok": ok, "message": msg, **node.route_info(name)})
+                elif self.path == "/api/slam_params":
+                    body = self._read_json()
+                    ok, msg = node.set_slam_params({} if body.get("reset") else body.get("values") or {})
                     self._send_json({"ok": ok, "message": msg})
                 elif self.path == "/api/save_checkpoint":
                     body = self._read_json()
@@ -457,10 +531,162 @@ class WebControlNode(Node):
             out[target] = sorted(names, key=lambda f: (f != f"{prefix}.yaml", f))
         return out
 
-    def _on_slam_pose(self, msg: PoseWithCovarianceStamped) -> None:
+    @staticmethod
+    def _xy_yaw(msg: PoseWithCovarianceStamped) -> tuple[float, float, float]:
         p, q = msg.pose.pose.position, msg.pose.pose.orientation
-        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
-        self._latest_pose = (p.x, p.y, yaw, time.monotonic())
+        return p.x, p.y, math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+
+    def _on_slam_pose(self, msg: PoseWithCovarianceStamped) -> None:
+        self._latest_pose = (*self._xy_yaw(msg), time.monotonic())
+
+    def _on_amcl_pose(self, msg: PoseWithCovarianceStamped) -> None:
+        self._latest_amcl = (*self._xy_yaw(msg), time.monotonic())
+
+    def _on_cmd_vel(self, msg: Twist) -> None:
+        self._latest_cmd = (msg.linear.x, msg.angular.z, time.monotonic())
+
+    # ---- SLAM settings --------------------------------------------------
+
+    def _slam_base_params(self) -> dict:
+        """slam_toolbox's params as the mapping launch loads them (installed
+        config/slam_toolbox_params.yaml)."""
+        from ament_index_python.packages import get_package_share_directory
+        path = os.path.join(get_package_share_directory("bot_bringup"), "config", "slam_toolbox_params.yaml")
+        with open(path) as f:
+            return (yaml.safe_load(f) or {})["slam_toolbox"]["ros__parameters"]
+
+    def _slam_overrides(self) -> dict:
+        try:
+            with open(self._ws_path(SLAM_OVERRIDES)) as f:
+                return ((yaml.safe_load(f) or {}).get("slam_toolbox") or {}).get("ros__parameters") or {}
+        except (OSError, yaml.YAMLError, AttributeError):
+            return {}
+
+    def slam_params(self) -> dict:
+        try:
+            base = self._slam_base_params()
+        except (LookupError, OSError, KeyError, TypeError, yaml.YAMLError) as exc:
+            return {"error": f"can't read slam_toolbox_params.yaml: {exc}", "params": []}
+        overrides = self._slam_overrides()
+        names = [n for n in SLAM_KEY_PARAMS if n in base] + sorted(
+            n for n in base if n not in SLAM_KEY_PARAMS and n not in SLAM_FIXED_PARAMS)
+        return {"params": [{
+            "name": n, "default": base[n], "value": overrides.get(n, base[n]),
+            "overridden": n in overrides, "key": n in SLAM_KEY_PARAMS, "hint": SLAM_KEY_PARAMS.get(n, ""),
+        } for n in names]}
+
+    def set_slam_params(self, values: dict) -> tuple[bool, str]:
+        """Save the given {name: value} (values equal to the default are
+        dropped); an empty result deletes the overrides file. Takes effect
+        at the next mapping start."""
+        try:
+            base = self._slam_base_params()
+        except (LookupError, OSError, KeyError, TypeError, yaml.YAMLError) as exc:
+            return False, f"can't read slam_toolbox_params.yaml: {exc}"
+        overrides = {}
+        for name, raw in (values or {}).items():
+            if name not in base or name in SLAM_FIXED_PARAMS:
+                return False, f"{name!r} isn't an editable slam_toolbox parameter"
+            default = base[name]
+            try:
+                if isinstance(default, bool):
+                    value = raw if isinstance(raw, bool) else str(raw).strip().lower() in ("true", "1", "yes")
+                elif isinstance(default, int):
+                    value = int(raw)
+                elif isinstance(default, float):
+                    value = float(raw)
+                else:
+                    value = str(raw)
+            except (TypeError, ValueError):
+                return False, f"{name}: {raw!r} isn't a valid {type(default).__name__}"
+            if value != default:
+                overrides[name] = value
+        path = self._ws_path(SLAM_OVERRIDES)
+        try:
+            if not overrides:
+                if os.path.exists(path):
+                    os.remove(path)
+                return True, "SLAM settings back to defaults (applies at the next mapping start)"
+            with open(path, "w") as f:
+                f.write("# Written by the web dashboard's SLAM settings; loaded on top of\n"
+                        "# slam_toolbox_params.yaml by mapping.launch.py (slam_params_overrides:=).\n")
+                yaml.safe_dump({"slam_toolbox": {"ros__parameters": overrides}}, f, default_flow_style=False)
+        except OSError as exc:
+            return False, f"couldn't save SLAM settings: {exc}"
+        changed = ", ".join(f"{k}={v}" for k, v in overrides.items())
+        return True, f"saved ({changed}) -- applies at the next mapping start"
+
+    # ---- topic reader -------------------------------------------------
+
+    def _reader_blocked(self, name: str) -> bool:
+        return any(name.startswith(b) if b.endswith("/") else name == b for b in self._reader_blocklist)
+
+    def list_topics(self) -> list[dict]:
+        """Topics the reader can open (blocked ones left out)."""
+        return [{"name": name, "type": types[0] if types else ""}
+                for name, types in sorted(self.get_topic_names_and_types())
+                if not self._reader_blocked(name)]
+
+    def read_topic(self, name: str) -> dict:
+        """Latest message on any topic, subscribing on first request with QoS
+        matched to its publishers (so best-effort sensor topics and latched
+        topics both work). Big arrays are truncated for display."""
+        name = "/" + name.strip().lstrip("/")
+        if self._reader_blocked(name):
+            return {"name": name, "error": "blocked in the dashboard (too heavy to decode on the Pi) -- "
+                                           "see the topic_reader_blocklist parameter"}
+        now = time.monotonic()
+        with self._watch_lock:
+            w = self._watched.get(name)
+            if w is None:
+                types = dict(self.get_topic_names_and_types()).get(name)
+                if not types:
+                    return {"name": name, "error": "no such topic (nothing publishing or subscribing to it)"}
+                try:
+                    from rosidl_runtime_py.utilities import get_message
+                    msg_class = get_message(types[0])
+                except (AttributeError, ModuleNotFoundError, ValueError) as exc:
+                    return {"name": name, "error": f"can't load message type {types[0]}: {exc}"}
+                if len(self._watched) >= MAX_WATCHED_TOPICS:
+                    oldest = min(self._watched, key=lambda t: self._watched[t]["last_poll"])
+                    self.destroy_subscription(self._watched.pop(oldest)["sub"])
+                w = {"type": types[0], "msg": None, "stamps": collections.deque(maxlen=100), "last_poll": now}
+                w["sub"] = self.create_subscription(
+                    msg_class, name, lambda m, w=w: self._on_watched(w, m), self._matching_qos(name))
+                self._watched[name] = w
+            w["last_poll"] = now
+            msg, stamps, msg_type = w["msg"], list(w["stamps"]), w["type"]
+        recent = [t for t in stamps if now - t <= 5.0]
+        rate = (len(recent) - 1) / (recent[-1] - recent[0]) if len(recent) >= 2 and recent[-1] > recent[0] else None
+        out = {"name": name, "type": msg_type, "rate_hz": round(rate, 1) if rate else None,
+               "age_s": round(now - stamps[-1], 1) if stamps else None, "message": None}
+        if msg is not None:
+            from rosidl_runtime_py import message_to_ordereddict
+            # default=str: anything json can't encode (bytes etc.) shows as text
+            out["message"] = json.loads(json.dumps(message_to_ordereddict(msg, truncate_length=16), default=str))
+        return out
+
+    def _matching_qos(self, name: str) -> QoSProfile:
+        infos = self.get_publishers_info_by_topic(name)
+        best_effort = not infos or any(i.qos_profile.reliability == QoSReliabilityPolicy.BEST_EFFORT for i in infos)
+        latched = bool(infos) and all(i.qos_profile.durability == QoSDurabilityPolicy.TRANSIENT_LOCAL for i in infos)
+        return QoSProfile(
+            depth=1,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            reliability=QoSReliabilityPolicy.BEST_EFFORT if best_effort else QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL if latched else QoSDurabilityPolicy.VOLATILE,
+        )
+
+    @staticmethod
+    def _on_watched(w: dict, msg) -> None:
+        w["msg"] = msg
+        w["stamps"].append(time.monotonic())
+
+    def _expire_watched(self) -> None:
+        now = time.monotonic()
+        with self._watch_lock:
+            for name in [t for t, w in self._watched.items() if now - w["last_poll"] > WATCH_EXPIRY_S]:
+                self.destroy_subscription(self._watched.pop(name)["sub"])
 
     def _ws_path(self, path: str) -> str:
         """Workspace-relative path -> absolute (when workspace_root is set)."""
@@ -533,15 +759,156 @@ class WebControlNode(Node):
             return False, err
         return True, f"saved final map as '{path}' (ready for bringup.launch.py)"
 
+    # ---- race route ----------------------------------------------------
+
+    def _route_path(self, name: str | None) -> tuple[str | None, str | None]:
+        """config/maps/<name>.route.yaml (name = a saved map's name, default
+        'map'): a route belongs to the map it was recorded on."""
+        base, err = self._resolve_map_name(name, self._map_save_path)
+        return (None, err) if err else (self._ws_path(base) + ".route.yaml", None)
+
+    def _current_map_pose(self, timeout: float = 2.0) -> dict | None:
+        """The robot's map pose right now: the live /pose or /amcl_pose if
+        fresh, else a one-off TF lookup of map -> base_link. Those topics
+        only publish while the robot moves, so after stopping at a corner
+        they go stale; the temporary TF listener costs nothing the rest of
+        the time."""
+        pose = self.status()["pose"]
+        if pose is not None and pose["age_s"] <= 3.0:
+            return pose
+        try:
+            from tf2_ros import Buffer, TransformListener
+        except ImportError:
+            return None
+        buf = Buffer()
+        listener = TransformListener(buf, self, spin_thread=False)
+        try:
+            end = time.monotonic() + timeout
+            while time.monotonic() < end:
+                try:
+                    t = buf.lookup_transform("map", "base_link", rclpy.time.Time())
+                except Exception:  # noqa: BLE001 -- not available yet
+                    time.sleep(0.05)
+                    continue
+                q = t.transform.rotation
+                yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+                return {"x": round(t.transform.translation.x, 3), "y": round(t.transform.translation.y, 3),
+                        "yaw": round(yaw, 3), "source": "tf", "age_s": 0.0}
+            return None
+        finally:
+            listener.unregister()
+
+    def _start_pose_path(self, name: str | None) -> tuple[str | None, str | None]:
+        base, err = self._resolve_map_name(name, self._map_save_path)
+        return (None, err) if err else (self._ws_path(base) + ".start.yaml", None)
+
+    def set_start_pose(self, name: str | None) -> tuple[bool, str]:
+        """Record the robot's current map pose as this map's race start
+        (<name>.start.yaml) -- bringup seeds AMCL from it."""
+        path, err = self._start_pose_path(name)
+        if err:
+            return False, err
+        pose = self._current_map_pose()
+        if pose is None:
+            return False, "no current map pose (needs slam_toolbox or AMCL running) -- nothing saved"
+        try:
+            with open(path, "w") as f:
+                f.write("# Race start pose in this map (web dashboard 'Set race start pose here');\n"
+                        "# bringup.launch.py seeds AMCL from it. Place the robot on the marked start spot.\n")
+                yaml.safe_dump({"x": pose["x"], "y": pose["y"], "yaw": pose["yaw"]}, f)
+        except OSError as exc:
+            return False, f"couldn't save the start pose: {exc}"
+        return True, (f"race start pose saved: x={pose['x']:.2f} y={pose['y']:.2f} yaw={pose['yaw']:.2f} "
+                      f"[{pose['source']}]")
+
+    def route_info(self, name: str | None) -> dict:
+        path, err = self._route_path(name)
+        if err:
+            return {"error": err, "checkpoints": []}
+        try:
+            with open(path) as f:
+                data = yaml.safe_load(f) or {}
+        except (OSError, yaml.YAMLError):
+            data = {}
+        start = None
+        start_path, _ = self._start_pose_path(name)
+        try:
+            with open(start_path) as f:
+                start = yaml.safe_load(f)
+        except (OSError, yaml.YAMLError, TypeError):
+            pass
+        return {"file": os.path.basename(path), "checkpoints": data.get("checkpoints") or [], "start_pose": start}
+
+    def _write_route(self, path: str, checkpoints: list) -> None:
+        with open(path, "w") as f:
+            f.write("# Race route recorded with the web dashboard ('Add checkpoint here'):\n"
+                    "# [x, y] in this map's frame, one lap, in driving order. lap_navigator\n"
+                    "# repeats it for the course's laps and closes each lap back to the first.\n")
+            yaml.safe_dump({"checkpoints": checkpoints}, f, default_flow_style=None)
+
+    def add_route_checkpoint(self, name: str | None) -> tuple[bool, str]:
+        """Append the robot's current map pose (slam or AMCL, whichever is
+        newest and fresh) to the route."""
+        path, err = self._route_path(name)
+        if err:
+            return False, err
+        pose = self._current_map_pose()
+        if pose is None:
+            return False, "no current map pose (needs slam_toolbox or AMCL running) -- nothing added"
+        points = self.route_info(name)["checkpoints"]
+        points.append([pose["x"], pose["y"]])
+        try:
+            self._write_route(path, points)
+        except OSError as exc:
+            return False, f"couldn't save the route: {exc}"
+        return True, f"checkpoint {len(points)} at ({pose['x']:.2f}, {pose['y']:.2f}) [{pose['source']}]"
+
+    def undo_route_checkpoint(self, name: str | None) -> tuple[bool, str]:
+        path, err = self._route_path(name)
+        if err:
+            return False, err
+        points = self.route_info(name)["checkpoints"]
+        if not points:
+            return False, "route is already empty"
+        points.pop()
+        self._write_route(path, points)
+        return True, f"removed the last checkpoint ({len(points)} left)"
+
+    def clear_route(self, name: str | None) -> tuple[bool, str]:
+        path, err = self._route_path(name)
+        if err:
+            return False, err
+        if os.path.exists(path):
+            os.remove(path)
+        return True, "route cleared"
+
     def start_launch(self, target: str, resume: bool = False, resume_pose: str | None = None,
                      autonomous: bool = False, map_name: str | None = None,
-                     nav2_params: str | None = None, checkpoint_name: str | None = None):
+                     nav2_params: str | None = None, checkpoint_name: str | None = None,
+                     race: bool = False, max_speed: float | None = None, max_turn: float | None = None):
         with self._lock:
             if self._proc is not None and self._proc.poll() is None:
                 return False, f"'{self._proc_label}' is already running -- stop it first"
         launch_file = "bringup.launch.py" if target == "bringup" else "mapping.launch.py"
         cmd = ["ros2", "launch", "bot_bringup", launch_file,
                f"use_sim:={'true' if self._use_sim else 'false'}", f"world:={self._world}"]
+        uses_nav2 = target == "bringup" or autonomous or race
+        # Speed caps for slow first laps (launch-side: capped copy of the Nav2 params)
+        for arg, value in (("max_speed", max_speed), ("max_turn", max_turn)):
+            if value and uses_nav2:
+                try:
+                    if float(value) > 0:
+                        cmd.append(f"{arg}:={float(value)}")
+                except (TypeError, ValueError):
+                    return False, f"{arg} must be a number, got {value!r}"
+        if race:
+            # Plan B: race on the live slam map along a recorded route
+            route_path, err = self._route_path(map_name)
+            if err:
+                return False, err
+            if not os.path.isfile(route_path):
+                return False, f"no recorded route {os.path.basename(route_path)} -- record one first"
+            cmd += ["race:=true", f"route:={os.path.abspath(route_path)}"]
         if target == "bringup" and map_name:
             # Only maps actually listed (no arbitrary paths from the browser).
             # Passed as a full path: maps saved since the last colcon build
@@ -551,16 +918,18 @@ class WebControlNode(Node):
             cmd.append(f"map:={os.path.abspath(os.path.join(self._maps_dir(), map_name + '.yaml'))}")
         # Nav2 variant (e.g. the MPPI controller). Teleop mapping doesn't
         # run Nav2 at all, so it's only passed where Nav2 actually starts.
-        if nav2_params and (target == "bringup" or autonomous):
+        if nav2_params and uses_nav2:
             if nav2_params not in self.list_nav2_params()[target]:
                 return False, f"no installed {target} Nav2 params file {nav2_params!r}"
             cmd.append(f"nav2_params_file:={nav2_params}")
         if target == "mapping":
+            if self._slam_overrides():
+                cmd.append(f"slam_params_overrides:={os.path.abspath(self._ws_path(SLAM_OVERRIDES))}")
             # Default: this tool's own teleop feature is what you'd drive it
             # with (mapping.launch.py skips Nav2 and frontier_explore_node).
             # Autonomous leaves teleop at its false default, so Nav2 +
             # frontier_explore_node drive the robot on their own.
-            if not autonomous:
+            if not autonomous and not race:
                 cmd.append("teleop:=true")
             if resume:
                 # Which checkpoint: checkpoint_name (same bare-name rules as
@@ -586,9 +955,11 @@ class WebControlNode(Node):
             return False, f"failed to launch: {exc}"
         with self._lock:
             self._proc = proc
-            self._proc_label = target
-        self.get_logger().info(f"started {launch_file} (pid {proc.pid})")
-        return True, f"started {launch_file}"
+            self._proc_label = "race (live map)" if race else target
+        # A new launch means new map frames: drop the previous run's readouts
+        self._latest_pose = self._latest_amcl = self._latest_cmd = None
+        self.get_logger().info(f"started {launch_file} (pid {proc.pid}): {' '.join(cmd[4:])}")
+        return True, f"started {launch_file}" + (" in race mode" if race else "")
 
     def stop_launch(self):
         with self._lock:
@@ -628,11 +999,21 @@ class WebControlNode(Node):
         with self._lock:
             running = self._proc_label if (self._proc is not None and self._proc.poll() is None) else None
             map_available = self._latest_map is not None
+        now = time.monotonic()
+        cmd = self._latest_cmd
+        # Map pose: whichever of slam_toolbox (mapping) / AMCL (racing) is newest
+        poses = [(p, src) for p, src in ((self._latest_pose, "slam"), (self._latest_amcl, "amcl")) if p]
+        pose, src = max(poses, key=lambda ps: ps[0][3]) if poses else (None, None)
         return {
             "running": running,
             "map_available": map_available,
             "linear_speed": self._linear_speed,
             "angular_speed": self._angular_speed,
+            "cmd_vel": None if cmd is None else {
+                "linear": round(cmd[0], 3), "angular": round(cmd[1], 3), "age_s": round(now - cmd[2], 1)},
+            "pose": None if pose is None else {
+                "x": round(pose[0], 3), "y": round(pose[1], 3), "yaw": round(pose[2], 3),
+                "source": src, "age_s": round(now - pose[3], 1)},
         }
 
     def shutdown(self) -> None:

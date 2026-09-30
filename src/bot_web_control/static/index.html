@@ -21,6 +21,16 @@
   .dpad button { width: 60px; height: 60px; font-size: 1.4rem; margin: 0; }
   label { display: block; font-size: 0.85rem; margin-top: 0.5rem; }
   input[type=range] { width: 200px; }
+  .live { font-family: monospace; font-size: 0.95rem; line-height: 1.5; }
+  .stale { color: #c96; }
+  details.slam { margin-top: 0.5rem; font-size: 0.85rem; }
+  details.slam table { border-collapse: collapse; }
+  details.slam td { padding: 1px 4px; vertical-align: top; }
+  details.slam input { width: 6rem; }
+  details.slam tr.changed td:first-child { color: #fc6; }
+  details.slam .hint { color: #999; font-size: 0.75rem; max-width: 22rem; }
+  #topicOut { max-width: 480px; max-height: 360px; overflow: auto; font-size: 0.8rem;
+              background: #1a1a1a; border: 1px solid #444; padding: 0.5rem; white-space: pre; }
 </style>
 </head>
 <body>
@@ -29,6 +39,9 @@
 
   <div class="row">
     <div class="panel">
+      <div><label>Nav2 speed cap (bringup, autonomous mapping, Plan B race; blank = full speed):
+        <input type="number" id="capSpeed" min="0" step="0.1" placeholder="m/s" style="width:5rem;">
+        <input type="number" id="capTurn" min="0" step="0.1" placeholder="rad/s" style="width:5rem;"></label></div>
       <div><button id="btnStart">Start (bringup)</button>
         <label>on map <select id="raceMap"><option value="">(loading...)</option></select></label>
         <label>Nav2 <select id="nav2Bringup"><option value="">(default)</option></select></label></div>
@@ -37,8 +50,16 @@
       <div><button id="btnMappingNew">Start New Mapping Run</button></div>
       <div><button id="btnMappingResume">Resume Mapping Run</button></div>
       <div><label>Nav2 for autonomous mapping <select id="nav2Mapping"><option value="">(default)</option></select></label></div>
+      <details class="slam">
+        <summary>SLAM settings (slam_toolbox -- applied at the next mapping start)</summary>
+        <div>Changed values are highlighted; the default is shown on the right.</div>
+        <table><tbody id="slamKey"></tbody></table>
+        <details><summary>all other parameters</summary><table><tbody id="slamRest"></tbody></table></details>
+        <button id="btnSlamSave">Save SLAM settings</button><button id="btnSlamReset">Reset to defaults</button>
+      </details>
       <div><button id="btnMappingAuto">Start Autonomous Mapping Run</button> (Nav2 + frontier exploration drive the robot -- wheels down, e-stop in hand)</div>
-      <div>Initial pose for Resume -- the robot's pose in the checkpoint's map. Filled in from the pose recorded at Save Checkpoint (for the checkpoint named below); edit only if the robot isn't back where it was when saved. <span id="poseSource"></span></div>
+      <div><button id="btnRaceLive">Race on live map (Plan B)</button> (no saved map: slam_toolbox live + the route recorded under Map name; start on the marked start spot)</div>
+      <div>Current bot pose if different than saved <span id="poseSource"></span></div>
       <label>x <input type="number" id="poseX" value="0.0" step="0.1" style="width:5rem;"></label>
       <label>y <input type="number" id="poseY" value="0.0" step="0.1" style="width:5rem;"></label>
       <label>yaw (rad) <input type="number" id="poseYaw" value="0.0" step="0.1" style="width:5rem;"></label>
@@ -48,6 +69,11 @@
       </label>
       <div><button id="btnSaveCheckpoint">Save Checkpoint (to resume later)</button></div>
       <div><button id="btnSaveFinalMap">Save Final Map (for racing)</button></div>
+      <hr style="border-color:#444; width:100%;">
+      <div>Race route for this map name (<span id="routeFile">map.route.yaml</span>): <b id="routeCount">0</b> checkpoints</div>
+      <div>Race start pose: <span id="startPose" class="live">none</span> <button id="btnStartPose">Set race start pose here</button></div>
+      <div><button id="btnRouteAdd">Add checkpoint here</button><button id="btnRouteUndo">Undo last</button><button id="btnRouteClear" class="danger">Clear route</button></div>
+      <div id="routeList" class="live" style="font-size:0.8rem;"></div>
     </div>
 
     <div class="panel">
@@ -67,6 +93,19 @@
     <div class="panel">
       <div>Map</div>
       <img id="mapImg" src="/api/map.png">
+    </div>
+
+    <div class="panel">
+      <div>Live</div>
+      <div class="live" id="liveCmd">cmd_vel: --</div>
+      <div class="live" id="livePose">pose: --</div>
+      <hr style="border-color:#444; width:100%;">
+      <div>Read a topic</div>
+      <input type="text" id="topicName" list="topicList" placeholder="/scan" style="width:16rem;">
+      <datalist id="topicList"></datalist>
+      <button id="btnTopicRead">Read</button><button id="btnTopicStop">Stop</button>
+      <div class="live" id="topicMeta"></div>
+      <pre id="topicOut"></pre>
     </div>
   </div>
 
@@ -184,12 +223,17 @@ document.getElementById('btnStart').addEventListener('click', () => {
   fetch('/api/launch/bringup', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ map: map || null, nav2_params: document.getElementById('nav2Bringup').value || null })
+    body: JSON.stringify({ map: map || null, nav2_params: document.getElementById('nav2Bringup').value || null,
+                           ...speedCaps() })
   }).then(r => r.json()).then(s => { if (!s.ok) alert(s.message); });
 });
 document.getElementById('btnStop').addEventListener('click', () => fetch('/api/stop', { method: 'POST' }));
 
-function startMapping(resume, autonomous = false) {
+function speedCaps() {
+  const v = parseFloat(document.getElementById('capSpeed').value), w = parseFloat(document.getElementById('capTurn').value);
+  return { max_speed: v > 0 ? v : null, max_turn: w > 0 ? w : null };
+}
+function startMapping(resume, autonomous = false, race = false) {
   const pose = [
     document.getElementById('poseX').value,
     document.getElementById('poseY').value,
@@ -200,6 +244,8 @@ function startMapping(resume, autonomous = false) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ resume: resume, pose: pose, autonomous: autonomous,
                            name: document.getElementById('mapName').value.trim() || null,
+                           race: race, route_name: document.getElementById('mapName').value.trim() || null,
+                           ...speedCaps(),
                            nav2_params: document.getElementById('nav2Mapping').value || null })
   }).then(r => r.json()).then(s => { if (!s.ok) alert(s.message); });
 }
@@ -219,6 +265,43 @@ function saveTo(endpoint) {
     .then(r => r.json())
     .then(s => { alert(s.message); loadMaps(); });
 }
+document.getElementById('btnRaceLive').addEventListener('click', () => {
+  if (confirm('Plan B: race on the live map with the recorded route. Robot on the marked start spot, e-stop in hand?'))
+    startMapping(false, false, true);
+});
+
+// Race route: checkpoints recorded at the robot's current map pose.
+function showRoute(d) {
+  document.getElementById('routeFile').textContent = d.file || '?';
+  const pts = d.checkpoints || [];
+  document.getElementById('routeCount').textContent = pts.length;
+  const sp = d.start_pose;
+  document.getElementById('startPose').textContent =
+    sp ? `x ${(+sp.x).toFixed(2)}  y ${(+sp.y).toFixed(2)}  yaw ${(+sp.yaw).toFixed(2)}` : 'none (bringup uses nav2_params)';
+  document.getElementById('routeList').textContent =
+    pts.map((p, i) => `${i + 1}: (${p[0].toFixed(2)}, ${p[1].toFixed(2)})`).join('   ');
+}
+function loadRoute() {
+  const name = document.getElementById('mapName').value.trim();
+  fetch('/api/route?name=' + encodeURIComponent(name)).then(r => r.json()).then(showRoute);
+}
+function routeAction(action) {
+  fetch('/api/route/' + action, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: document.getElementById('mapName').value.trim() || null })
+  }).then(r => r.json()).then(d => { showRoute(d); if (!d.ok) alert(d.message); });
+}
+document.getElementById('btnRouteAdd').addEventListener('click', () => routeAction('add'));
+document.getElementById('btnStartPose').addEventListener('click', () => {
+  if (confirm('Robot on the marked race start spot? This becomes the map\'s AMCL start pose.')) routeAction('start');
+});
+document.getElementById('btnRouteUndo').addEventListener('click', () => routeAction('undo'));
+document.getElementById('btnRouteClear').addEventListener('click', () => {
+  if (confirm('Delete every checkpoint in this route?')) routeAction('clear');
+});
+document.getElementById('mapName').addEventListener('change', loadRoute);
+loadRoute();
+
 // Resume pose: fill x/y/yaw from the pose recorded with the named checkpoint.
 function loadCheckpointPose() {
   const name = document.getElementById('mapName').value.trim();
@@ -244,6 +327,16 @@ function refreshStatus() {
     document.getElementById('status').textContent =
       'status: ' + (s.running ? ('running: ' + s.running) : 'idle') +
       (s.map_available ? ' | map available' : ' | no map yet');
+    const ageTxt = a => a > 2 ? ` <span class="stale">(${a} s ago)</span>` : ` (${a} s ago)`;
+    const c = s.cmd_vel;
+    document.getElementById('liveCmd').innerHTML = c
+      ? `cmd_vel: lin ${c.linear.toFixed(2)} m/s  ang ${c.angular.toFixed(2)} rad/s` + ageTxt(c.age_s)
+      : 'cmd_vel: none yet';
+    const p = s.pose;
+    document.getElementById('livePose').innerHTML = p
+      ? `pose (${p.source}): x ${p.x.toFixed(2)}  y ${p.y.toFixed(2)}  yaw ${p.yaw.toFixed(2)} rad` +
+        ` (${(p.yaw * 180 / Math.PI).toFixed(0)}&deg;)` + ageTxt(p.age_s)
+      : 'pose: none yet (needs slam_toolbox or AMCL running)';
     if (!speedsInitialized) {
       speedsInitialized = true;
       linInput.value = s.linear_speed; angInput.value = s.angular_speed;
@@ -254,6 +347,70 @@ function refreshStatus() {
 }
 refreshStatus();
 setInterval(refreshStatus, 1000);
+
+// SLAM settings: every slam_toolbox param, heading-related ones first.
+function slamRow(p) {
+  const tr = document.createElement('tr');
+  if (p.overridden) tr.className = 'changed';
+  const input = typeof p.default === 'boolean'
+    ? `<select data-name="${p.name}"><option${p.value ? ' selected' : ''}>true</option><option${p.value ? '' : ' selected'}>false</option></select>`
+    : `<input data-name="${p.name}" value="${p.value}">`;
+  tr.innerHTML = `<td>${p.name}</td><td>${input}</td><td>(${p.default})</td>` +
+                 (p.hint ? `<td class="hint">${p.hint}</td>` : '<td></td>');
+  return tr;
+}
+function loadSlamParams() {
+  fetch('/api/slam_params').then(r => r.json()).then(d => {
+    const key = document.getElementById('slamKey'), rest = document.getElementById('slamRest');
+    key.innerHTML = ''; rest.innerHTML = '';
+    if (d.error) { key.innerHTML = `<tr><td>${d.error}</td></tr>`; return; }
+    for (const p of d.params) (p.key ? key : rest).appendChild(slamRow(p));
+  });
+}
+function postSlam(body) {
+  fetch('/api/slam_params', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  }).then(r => r.json()).then(s => { alert(s.message); loadSlamParams(); });
+}
+document.getElementById('btnSlamSave').addEventListener('click', () => {
+  const values = {};
+  document.querySelectorAll('details.slam [data-name]').forEach(el => { values[el.dataset.name] = el.value; });
+  postSlam({ values: values });
+});
+document.getElementById('btnSlamReset').addEventListener('click', () => {
+  if (confirm('Reset all SLAM settings to the defaults?')) postSlam({ reset: true });
+});
+loadSlamParams();
+
+// Topic reader: polls /api/topic once a second while a topic is selected.
+let topicTimer = null;
+function loadTopicList() {
+  fetch('/api/topics').then(r => r.json()).then(d => {
+    const dl = document.getElementById('topicList');
+    dl.innerHTML = '';
+    for (const t of d.topics) {
+      const opt = document.createElement('option');
+      opt.value = t.name; opt.label = t.type;
+      dl.appendChild(opt);
+    }
+  });
+}
+function readTopic() {
+  const name = document.getElementById('topicName').value.trim();
+  if (!name) return;
+  fetch('/api/topic?name=' + encodeURIComponent(name)).then(r => r.json()).then(d => {
+    const meta = document.getElementById('topicMeta');
+    if (d.error) { meta.textContent = d.error; document.getElementById('topicOut').textContent = ''; return; }
+    meta.textContent = `${d.type}  |  ${d.rate_hz != null ? d.rate_hz + ' Hz' : 'rate --'}  |  ` +
+      (d.age_s != null ? `last ${d.age_s} s ago` : 'no message yet');
+    document.getElementById('topicOut').textContent = d.message ? JSON.stringify(d.message, null, 2) : '';
+  });
+}
+document.getElementById('topicName').addEventListener('focus', loadTopicList);
+document.getElementById('btnTopicRead').addEventListener('click', () => {
+  clearInterval(topicTimer); readTopic(); topicTimer = setInterval(readTopic, 1000);
+});
+document.getElementById('btnTopicStop').addEventListener('click', () => { clearInterval(topicTimer); topicTimer = null; });
 setInterval(() => { document.getElementById('mapImg').src = '/api/map.png?t=' + Date.now(); }, 2000);
 </script>
 </body>
