@@ -15,7 +15,14 @@
   button.danger:hover { background: #522; }
   button:disabled { opacity: 0.4; cursor: not-allowed; }
   #status { font-size: 0.9rem; color: #9c9; margin-bottom: 0.5rem; }
-  #mapImg { max-width: 480px; border: 1px solid #555; background: #000; image-rendering: pixelated; }
+  /* Fixed-size map box: the map scales to fit (keeping its proportions, crisp
+     pixels), so the layout doesn't jump when a map arrives, and small maps
+     aren't postage stamps. */
+  #mapBox { position: relative; width: 480px; height: 480px; max-width: 90vw; max-height: 90vw;
+            border: 1px solid #555; background: #000; }
+  #mapImg { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; display: none; }
+  #mapEmpty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+              color: #777; font-size: 0.9rem; }
   .dpad { display: grid; grid-template-columns: 60px 60px 60px; grid-template-rows: 60px 60px;
           gap: 4px; margin-top: 0.5rem; }
   .dpad button { width: 60px; height: 60px; font-size: 1.4rem; margin: 0; }
@@ -145,7 +152,7 @@
 
     <div class="panel">
       <div>Map</div>
-      <img id="mapImg" src="/api/map.png">
+      <div id="mapBox"><img id="mapImg" alt="map"><div id="mapEmpty">no map yet</div></div>
     </div>
 
     <div class="panel">
@@ -177,6 +184,7 @@ linInput.addEventListener('input', () => { linSpeed = Number(linInput.value); re
 angInput.addEventListener('input', () => { angSpeed = Number(angInput.value); refreshSpeedLabels(); });
 
 const held = new Set();
+let mapAvailable = false;  // from /api/status; gates the map PNG refresh
 // Q/E radius: at 0.3 m/s this turns ~17 deg/s, so ~2 s of holding for a
 // 30 deg change of direction -- no pivot, both sides keep driving forward.
 const ARC_RADIUS_M = 1.0;
@@ -411,6 +419,9 @@ function refreshStatus() {
     document.getElementById('status').textContent =
       'status: ' + (s.running ? ('running: ' + s.running) : 'idle') +
       (s.map_available ? ' | map available' : ' | no map yet');
+    mapAvailable = s.map_available;
+    document.getElementById('mapImg').style.display = mapAvailable ? 'block' : 'none';
+    document.getElementById('mapEmpty').style.display = mapAvailable ? 'none' : 'flex';
     const ageTxt = a => a > 2 ? ` <span class="stale">(${a} s ago)</span>` : ` (${a} s ago)`;
     const c = s.cmd_vel;
     document.getElementById('liveCmd').innerHTML = c
@@ -495,7 +506,10 @@ document.getElementById('btnTopicRead').addEventListener('click', () => {
   clearInterval(topicTimer); readTopic(); topicTimer = setInterval(readTopic, 1000);
 });
 document.getElementById('btnTopicStop').addEventListener('click', () => { clearInterval(topicTimer); topicTimer = null; });
-setInterval(() => { document.getElementById('mapImg').src = '/api/map.png?t=' + Date.now(); }, 2000);
+// Only fetch the PNG while a map exists (no broken-image flashes before that)
+setInterval(() => {
+  if (mapAvailable) document.getElementById('mapImg').src = '/api/map.png?t=' + Date.now();
+}, 2000);
 </script>
 </body>
 </html>
