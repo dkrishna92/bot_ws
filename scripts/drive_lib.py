@@ -32,7 +32,7 @@ MAX_DUTY = 75.0  # same as motor_node's max_duty_cycle: ~12 V (motor rating) fro
 # Same as wheel_odom_node's defaults.
 TICKS_PER_REV = 979.62
 WHEEL_RADIUS_M = 0.06
-TRACK_WIDTH_M = 0.32
+TRACK_WIDTH_M = 0.33  # measured 2026-09-30
 M_PER_TICK = 2 * math.pi * WHEEL_RADIUS_M / TICKS_PER_REV
 
 # BNO055 on I2C3 (GPIO14/15), same as hardware.launch.py's imu_i2c_bus

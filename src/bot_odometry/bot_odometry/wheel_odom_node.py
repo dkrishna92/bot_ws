@@ -73,7 +73,7 @@ class WheelOdomNode(Node):
         self.declare_parameter("baud", 115200)
         self.declare_parameter("ticks_per_rev", 979.62)
         self.declare_parameter("wheel_radius_m", 0.06)
-        self.declare_parameter("track_width_m", 0.32)
+        self.declare_parameter("track_width_m", 0.33)  # measured 2026-09-30 (was 0.32)
 
         self._ticks_per_rev = self.get_parameter("ticks_per_rev").value
         self._wheel_radius = self.get_parameter("wheel_radius_m").value

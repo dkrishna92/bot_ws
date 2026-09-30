@@ -143,7 +143,8 @@ def test_fast_arc_is_passed_through_unchanged(node):
     node._on_cmd_vel(msg)
     calls = _capture_duty(node)
     node._tick()
-    assert calls == pytest.approx([(1.0 - 0.5 * 0.16) / 2.0, (1.0 + 0.5 * 0.16) / 2.0])
+    half = node._track_width / 2.0
+    assert calls == pytest.approx([(1.0 - 0.5 * half) / 2.0, (1.0 + 0.5 * half) / 2.0])
 
 
 def _capture_both(node):
@@ -153,7 +154,7 @@ def _capture_both(node):
 
 
 def test_slow_gentle_arc_keeps_its_wheel_ratio(node):
-    """0.3 m/s with a 1 m radius (Q/E teleop): 0.126 / 0.174 duty. Flooring
+    """0.3 m/s with a 1 m radius (Q/E teleop): ~0.125 / 0.175 duty. Flooring
     each side to 0.25 would drive straight; scaling both keeps the arc."""
     msg = Twist()
     msg.linear.x = 0.3
@@ -163,7 +164,8 @@ def test_slow_gentle_arc_keeps_its_wheel_ratio(node):
     node._tick()
     (left, lf), (right, rf) = calls
     assert right == pytest.approx(node._min_duty)             # outer side lifted to the floor
-    assert left / right == pytest.approx((0.3 - 0.048) / (0.3 + 0.048))  # same ratio as asked
+    d = 0.3 * node._track_width / 2.0
+    assert left / right == pytest.approx((0.3 - d) / (0.3 + d))  # same ratio as asked
     assert lf == 0.0 and rf == 0.0                            # no per-side floor on top
 
 

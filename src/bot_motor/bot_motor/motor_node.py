@@ -70,7 +70,7 @@ class MotorNode(Node):
         # surface and set this a few percent above its breakaway duty.
         self.declare_parameter("min_turn_duty_cycle", 0.45)
         self.declare_parameter("cmd_vel_timeout_s", 0.3)
-        self.declare_parameter("track_width_m", 0.32)
+        self.declare_parameter("track_width_m", 0.33)  # measured 2026-09-30 (was 0.32)
         self.declare_parameter("max_linear_speed_mps", 2.0)
         # Pin map fixed by the Pololu Dual G2 for Raspberry Pi board (BCM GPIO
         # numbers): motor 1 = channel A = left, motor 2 = channel B = right.

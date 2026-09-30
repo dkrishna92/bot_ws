@@ -112,7 +112,7 @@ Hard constraints from the rules doc:
   swapped). Read via the analog workaround until the dividers are fixed —
   see Open items.
 - Wheelbase (front-to-rear axle spacing) measured 0.216 m (2026-09-30; the
-  URDF had a 0.33 estimate). Track 0.32 m. A short wheelbase relative to
+  URDF had a 0.33 estimate). Track 0.33 m (measured the same day; was 0.32). A short wheelbase relative to
   the track makes skid-steer pivots easier (less wheel scrub). Nav2's
   footprint uses the chassis length, not the wheelbase, so it's unaffected.
 - Drive motors: Pololu #4843 (20.4:1 25D 12V HP gearmotor), one per wheel,
@@ -766,7 +766,7 @@ the "if bringup fails" guide.
   frame and are wrong on the real course (and on the current sim map).
 - **lap_navigator resumes after a Nav2 abort** from the first unreached
   checkpoint (max_retries 5, 3 s apart) instead of stopping for the race.
-- **Nav2 footprint is the real rectangle** `[[+-0.225, +-0.19]]` + 0.02
+- **Nav2 footprint is the real rectangle** `[[+-0.225, +-0.195]]` + 0.02
   padding in all 9 params files, not `robot_radius: 0.26`: the circle was
   7 cm too wide per side and the sim planner refused a lane the robot had
   just driven through by teleop.

@@ -14,7 +14,7 @@
   <xacro:property name="wheel_radius" value="0.06"/>  <!-- 0.06 m = 2.4 in radius (4.7 in dia) -->
   <xacro:property name="wheel_width" value="0.06"/>  <!-- 0.06 m = 2.4 in -->
   <xacro:property name="wheelbase" value="0.216"/>   <!-- front-to-rear axle spacing, measured 0.216 m = 8.5 in (2026-09-30; was a 0.33 estimate) -->
-  <xacro:property name="track_width" value="0.32"/>  <!-- left-to-right wheel-centre spacing, 0.32 m = 12.6 in -->
+  <xacro:property name="track_width" value="0.33"/>  <!-- left-to-right wheel-centre spacing, measured 0.33 m = 13.0 in (2026-09-30; was 0.32) -->
   <xacro:property name="mass_base" value="3.2"/>    <!-- 3.2 kg = 7.0 lb -->
   <xacro:property name="mass_wheel" value="0.2"/>   <!-- 0.2 kg = 0.44 lb each -->
   <!-- OAK-D S2 housing (~91 x 28 x 17.5 mm) and its measured mount height:

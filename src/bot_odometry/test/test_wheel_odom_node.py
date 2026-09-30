@@ -36,12 +36,15 @@ def test_equal_tick_deltas_drive_straight(node):
     published = _last_published(node)
     node._on_line("E,0,0,0")
     node._last_sample_time -= 0.1  # force a positive dt without a real sleep
-    node._on_line(f"E,{node._ticks_per_rev},{node._ticks_per_rev},100000")
+    # The Teensy sends whole tick counts; ticks_per_rev is fractional
+    # (979.62), so one wheel turn is ~980 ticks.
+    ticks = round(node._ticks_per_rev)
+    node._on_line(f"E,{ticks},{ticks},100000")
 
     assert len(published) == 1
     msg = published[0]
     assert msg.pose.pose.position.x == pytest.approx(
-        2.0 * math.pi * node._wheel_radius, rel=1e-6
+        2.0 * math.pi * node._wheel_radius * ticks / node._ticks_per_rev, rel=1e-6
     )
     assert msg.pose.pose.position.y == pytest.approx(0.0, abs=1e-9)
     assert msg.twist.twist.angular.z == pytest.approx(0.0, abs=1e-9)
@@ -51,7 +54,7 @@ def test_unequal_tick_deltas_turn_in_place_sign(node):
     published = _last_published(node)
     node._on_line("E,0,0,0")
     node._last_sample_time -= 0.1
-    node._on_line(f"E,0,{node._ticks_per_rev},100000")
+    node._on_line(f"E,0,{round(node._ticks_per_rev)},100000")
 
     assert len(published) == 1
     assert published[0].twist.twist.angular.z > 0.0
@@ -92,3 +95,12 @@ def test_malformed_ultrasonic_line_is_ignored(node):
     node._on_line("U,not,a,0")
     for msgs in published.values():
         assert msgs == []
+
+
+def test_fractional_tick_line_is_ignored(node):
+    """The Teensy only sends integers; anything else is a corrupt line."""
+    published = _last_published(node)
+    node._on_line("E,0,0,0")
+    node._last_sample_time -= 0.1
+    node._on_line("E,979.62,979.62,100000")
+    assert published == []
