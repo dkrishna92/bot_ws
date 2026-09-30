@@ -86,6 +86,7 @@ import collections
 import json
 import math
 import os
+import re
 import signal
 import struct
 import subprocess
@@ -301,12 +302,16 @@ class WebControlNode(Node):
                     self._send_json(node.read_topic(name) if name.strip("/ ") else {"error": "no topic name"})
                 elif self.path.startswith("/api/checkpoint_pose"):
                     from urllib.parse import parse_qs, urlparse
-                    name = (parse_qs(urlparse(self.path).query).get("name") or [""])[0]
-                    self._send_json({"pose": node.checkpoint_pose(name)})
+                    q = parse_qs(urlparse(self.path).query)
+                    base = (q.get("base") or [None])[0]
+                    name = node.pick_checkpoint((q.get("name") or [""])[0], base, saving=False)
+                    self._send_json({"name": name, "pose": node.checkpoint_pose(name) if (name or base is None) else None})
                 elif self.path.startswith("/api/nav2_params"):
                     self._send_json(node.list_nav2_params())
                 elif self.path.startswith("/api/checkpoints"):
-                    self._send_json({"checkpoints": node.list_checkpoints()})
+                    from urllib.parse import parse_qs, urlparse
+                    base = (parse_qs(urlparse(self.path).query).get("base") or [""])[0]
+                    self._send_json({"checkpoints": node.list_checkpoints(), **node.checkpoint_sequence(base)})
                 elif self.path.startswith("/api/maps"):
                     self._send_json({"maps": node.list_maps()})
                 elif self.path.startswith("/api/status"):
@@ -335,11 +340,17 @@ class WebControlNode(Node):
                     self._send_json({"ok": ok, "message": msg})
                 elif self.path == "/api/launch/mapping":
                     body = self._read_json()
+                    resume = bool(body.get("resume", False))
+                    ckpt = node.pick_checkpoint(body.get("name"), body.get("base"), saving=False)
+                    if resume and ckpt is None and body.get("base") is not None:
+                        self._send_json({"ok": False, "message":
+                                         f"no checkpoint saved yet for '{body.get('base') or 'map'}' -- nothing to resume"})
+                        return
                     ok, msg = node.start_launch(
                         "mapping",
-                        resume=bool(body.get("resume", False)),
+                        resume=resume,
                         resume_pose=body.get("pose"),
-                        checkpoint_name=body.get("name"),
+                        checkpoint_name=ckpt,
                         autonomous=bool(body.get("autonomous", False)),
                         nav2_params=body.get("nav2_params"),
                         race=bool(body.get("race", False)),
@@ -360,8 +371,9 @@ class WebControlNode(Node):
                     self._send_json({"ok": ok, "message": msg})
                 elif self.path == "/api/save_checkpoint":
                     body = self._read_json()
-                    ok, msg = node.save_checkpoint(body.get("name"))
-                    self._send_json({"ok": ok, "message": msg})
+                    name = node.pick_checkpoint(body.get("name"), body.get("base"), saving=True)
+                    ok, msg = node.save_checkpoint(name)
+                    self._send_json({"ok": ok, "message": msg, "name": name})
                 elif self.path == "/api/save_final_map":
                     body = self._read_json()
                     ok, msg = node.save_final_map(body.get("name"))
@@ -504,6 +516,29 @@ class WebControlNode(Node):
             return []
         files.sort(key=lambda f: os.path.getmtime(os.path.join(maps_dir, f)), reverse=True)
         return [f[:-len(".posegraph")] for f in files]
+
+    def checkpoint_sequence(self, base: str | None) -> dict:
+        """Auto-numbered checkpoints for a map name: base 'speed' ->
+        speed_1, speed_2, ... Returns {'next': name to save, 'latest': newest
+        existing name or None}."""
+        base = (base or "").strip() or "map"
+        if "/" in base or "\\" in base or base in (".", ".."):
+            return {"next": None, "latest": None}
+        pattern = re.compile(rf"^{re.escape(base)}_(\d+)$")
+        numbers = [int(m.group(1)) for n in self.list_checkpoints() if (m := pattern.match(n))]
+        return {"next": f"{base}_{max(numbers, default=0) + 1}",
+                "latest": f"{base}_{max(numbers)}" if numbers else None}
+
+    def pick_checkpoint(self, name: str | None, base: str | None, saving: bool) -> str | None:
+        """An explicit checkpoint name wins; otherwise, when a map name is
+        given, the next auto-numbered one (saving) or the latest (resuming).
+        None when neither applies (callers then use the default checkpoint)."""
+        if name and name.strip():
+            return name.strip()
+        if base is None:
+            return None
+        seq = self.checkpoint_sequence(base)
+        return seq["next"] if saving else seq["latest"]
 
     def list_maps(self) -> list[str]:
         """Names of the saved race maps: every <name>.yaml in the maps

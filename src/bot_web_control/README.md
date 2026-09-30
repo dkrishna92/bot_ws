@@ -58,7 +58,7 @@ and **3 · Race** (speed cap, Plan A = saved map, Plan B = live map).
 | **SLAM settings** | Every slam_toolbox parameter (except frame/topic wiring), heading-related ones first with hints. **Save** writes the changes to `src/bot_bringup/config/slam_toolbox_overrides.yaml`, which every mapping start then loads on top of `slam_toolbox_params.yaml` (`slam_params_overrides:=`); **Reset** deletes it. Takes effect at the next mapping start, not in a running one. |
 | **Start Autonomous Mapping Run** | Runs `mapping.launch.py` without `teleop:=true`: Nav2 and `bot_explore`'s frontier explorer drive the robot into unexplored space on their own while SLAM builds the map (always a fresh map). Asks for confirmation first. Heavier than teleop mapping, since it runs the full Nav2 stack. |
 | **Stop** | Sends Ctrl-C (SIGINT) to the running launch, force-kills it after 5 s, publishes a zero `/cmd_vel`, and, if `workspace_root` is set, runs `clean_robot.sh` (robot) or `clean_sim.sh` (sim) to catch leftover processes. It passes `--keep-dashboard`, so the dashboard itself keeps running. |
-| **Checkpoint name** | Which checkpoint Save Checkpoint writes and Resume reloads (blank = `checkpoint`); the list offers the saved ones, newest first. Use one per good section (`speed_1`, `speed_2`, ...) so a bad save never overwrites a good one. |
+| **Checkpoint name** | Leave empty: Save Checkpoint numbers them from the Map name (`speed_1`, `speed_2`, ...) so a bad save never overwrites a good one, and Resume reloads the latest (the placeholder shows both). Type a name to save or resume a specific one; the list offers the saved ones, newest first. |
 | **Map name** | The course (blank = `map`): Save Final Map, the route recorder and the race start pose all use it. |
 | **Save Checkpoint** | Calls slam_toolbox's `/slam_toolbox/serialize_map` (the pose graph, resumable) without ending the run, and records the robot's current map pose (slam_toolbox's `/pose`) next to it as `<name>.pose.json`. |
 | **Save Final Map** | Calls `/slam_toolbox/save_map`: the `.pgm`/`.yaml` pair bringup races on. Not resumable. |
@@ -135,7 +135,7 @@ The page is a thin client over these endpoints; `curl` works too, e.g.
 | GET | `/api/nav2_params` | JSON: `bringup` and `mapping`, the installed Nav2 params variants. |
 | POST | `/api/launch/bringup` | Start the race launch; optional body `{"map": "<name>", "nav2_params": "<file>"}` (from `/api/maps` / `/api/nav2_params`). |
 | POST | `/api/launch/mapping` | Start a mapping run; body `{"resume": true, "name": "<checkpoint>", "pose": "x,y,yaw"}` to resume (pose optional: defaults to the recorded one), or `{"autonomous": true, "nav2_params": "<file>"}` for frontier exploration instead of teleop. |
-| GET | `/api/checkpoints` | JSON: `checkpoints`, saved checkpoint names, newest first. |
+| GET | `/api/checkpoints?base=<map name>` | JSON: `checkpoints` (saved names, newest first), `next` and `latest` auto-numbered names for that map. |
 | GET | `/api/checkpoint_pose?name=<checkpoint>` | JSON: `pose` (`x`, `y`, `yaw`) recorded at Save Checkpoint, or `null`. |
 | POST | `/api/save_checkpoint` | Save a resumable checkpoint + its pose; optional body `{"name": "<bare name>"}`. |
 | POST | `/api/save_final_map` | Save the race map; optional body `{"name": "<bare name>"}`. |

@@ -95,15 +95,17 @@ For each course, in the dashboard:
    jerk and smear the map. At each corner press **Add
    checkpoint here**, in driving order. Finish one lap back near the start.
    After each good section, **stop, put a piece of tape under the robot**
-   (the resume spot), and **Save Checkpoint** with a new **Checkpoint name**
-   each time: `speed_1`, `speed_2`, ... Map name stays `speed`.
+   (the resume spot), and press **Save Checkpoint** with the Checkpoint name
+   field **left empty**. It numbers them from the Map name automatically:
+   `speed_1`, `speed_2`, ... (the field's placeholder shows the next one).
 
    **If a section maps badly** (lanes off or rotated):
    1. **Stop** the mapping run. Everything after the last checkpoint is thrown away.
    2. Put the robot back on that checkpoint's tape mark, **facing the same way**.
       Within a few cm and a few degrees is fine; the scan matcher corrects small errors.
-   3. Pick that checkpoint (e.g. `speed_2`) in **Checkpoint name**, and check
-      that x / y / yaw filled in "(from checkpoint ...)".
+   3. Leave **Checkpoint name** empty to resume the **latest** one (the
+      placeholder says which), or pick an older one from its list. Check that
+      x / y / yaw show "the pose saved with ...".
    4. **Resume Mapping Run**, then drive that section again, slower.
    5. Route checkpoints you added during the bad section are wrong: press
       **Undo last** until the list ends at the last good corner.

@@ -76,9 +76,10 @@
         <div id="routeList" class="live" style="font-size:0.8rem;"></div>
 
         <h3>Save progress / redo a bad section</h3>
-        <label>Checkpoint name <input type="text" id="ckptName" list="ckptList" placeholder="checkpoint" style="width:10rem;">
+        <label>Checkpoint name <input type="text" id="ckptName" list="ckptList" style="width:16rem;">
           <datalist id="ckptList"></datalist>
-          <span class="note">new one per good section: speed_1, speed_2, ... (tape a mark under the robot)</span></label>
+          <span class="note">leave empty: numbered automatically from the Map name (speed_1, speed_2, ...) and
+          Resume picks the latest; type a name to save or resume a specific one. Tape a mark under the robot when saving.</span></label>
         <div><button id="btnSaveCheckpoint">Save Checkpoint</button></div>
         <div><button id="btnMappingResume">Resume Mapping Run</button>
           <span class="note">reloads the checkpoint named above -- robot back on its mark, facing the same way</span></div>
@@ -308,6 +309,7 @@ function startMapping(resume, autonomous = false, race = false) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ resume: resume, pose: pose, autonomous: autonomous,
                            name: document.getElementById('ckptName').value.trim() || null,
+                           base: document.getElementById('mapName').value.trim(),
                            race: race, route_name: document.getElementById('mapName').value.trim() || null,
                            ...speedCaps(),
                            nav2_params: document.getElementById('nav2Mapping').value || null })
@@ -324,7 +326,7 @@ function saveTo(endpoint, fieldId = 'mapName') {
   return fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: name || null })
+    body: JSON.stringify({ name: name || null, base: document.getElementById('mapName').value.trim() })
   })
     .then(r => r.json())
     .then(s => { alert(s.message); loadMaps(); });
@@ -368,10 +370,13 @@ loadRoute();
 
 // Saved checkpoints, for the Checkpoint name list (pick the last good one to resume).
 function loadCheckpoints() {
-  fetch('/api/checkpoints').then(r => r.json()).then(d => {
+  const base = document.getElementById('mapName').value.trim();
+  fetch('/api/checkpoints?base=' + encodeURIComponent(base)).then(r => r.json()).then(d => {
     const dl = document.getElementById('ckptList');
     dl.innerHTML = '';
     for (const n of d.checkpoints) { const o = document.createElement('option'); o.value = n; dl.appendChild(o); }
+    document.getElementById('ckptName').placeholder =
+      `auto: saves ${d.next || '?'}, resumes ${d.latest || '(nothing yet)'}`;
   });
 }
 loadCheckpoints();
@@ -379,10 +384,13 @@ document.getElementById('ckptName').addEventListener('focus', loadCheckpoints);
 
 // Resume pose: fill x/y/yaw from the pose recorded with the named checkpoint.
 function loadCheckpointPose() {
-  const name = document.getElementById('ckptName').value.trim();
-  fetch('/api/checkpoint_pose?name=' + encodeURIComponent(name)).then(r => r.json()).then(d => {
+  const base = document.getElementById('mapName').value.trim();
+  fetch('/api/checkpoint_pose?name=' + encodeURIComponent(document.getElementById('ckptName').value.trim()) +
+        '&base=' + encodeURIComponent(base)).then(r => r.json()).then(d => {
+    const name = d.name;
     const src = document.getElementById('poseSource');
-    if (!d.pose) { src.textContent = 'x/y/yaw below (no pose was saved with "' + (name || 'checkpoint') + '" -- enter it by hand)'; return; }
+    if (!name) { src.textContent = 'x/y/yaw below (no checkpoint saved yet for this map)'; return; }
+    if (!d.pose) { src.textContent = 'x/y/yaw below (no pose was saved with "' + name + '" -- enter it by hand)'; return; }
     document.getElementById('poseX').value = d.pose.x;
     document.getElementById('poseY').value = d.pose.y;
     document.getElementById('poseYaw').value = d.pose.yaw;
@@ -391,6 +399,7 @@ function loadCheckpointPose() {
 }
 loadCheckpointPose();
 document.getElementById('ckptName').addEventListener('change', loadCheckpointPose);
+document.getElementById('mapName').addEventListener('change', () => { loadCheckpoints(); loadCheckpointPose(); });
 document.getElementById('btnSaveCheckpoint').addEventListener('click',
   () => saveTo('/api/save_checkpoint', 'ckptName').then(() => { loadCheckpointPose(); loadCheckpoints(); }));
 document.getElementById('btnSaveFinalMap').addEventListener('click', () => saveTo('/api/save_final_map'));

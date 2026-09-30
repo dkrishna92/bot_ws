@@ -815,3 +815,32 @@ def test_list_checkpoints_newest_first(tmp_path):
         os.utime(f, (1000 + i, 1000 + i))
     (d / "map.yaml").write_text("image: map.pgm\n")
     assert node.list_checkpoints() == ["speed_3", "speed_2", "speed_1"]
+
+
+def _ckpt_node(tmp_path, names):
+    import os
+    node = _make_node()
+    node._workspace_root = str(tmp_path)
+    d = tmp_path / "src" / "bot_bringup" / "config" / "maps"
+    d.mkdir(parents=True, exist_ok=True)
+    for i, n in enumerate(names):
+        f = d / f"{n}.posegraph"
+        f.write_bytes(b"x")
+        os.utime(f, (1000 + i, 1000 + i))
+    return node
+
+
+def test_checkpoint_sequence_numbers_per_map_name(tmp_path):
+    node = _ckpt_node(tmp_path, ["speed_1", "speed_2", "speed_10", "obstacle_1", "speedway_4", "checkpoint"])
+    assert node.checkpoint_sequence("speed") == {"next": "speed_11", "latest": "speed_10"}
+    assert node.checkpoint_sequence("obstacle") == {"next": "obstacle_2", "latest": "obstacle_1"}
+    assert node.checkpoint_sequence("new") == {"next": "new_1", "latest": None}
+    assert node.checkpoint_sequence("") == {"next": "map_1", "latest": None}
+
+
+def test_pick_checkpoint_explicit_name_wins(tmp_path):
+    node = _ckpt_node(tmp_path, ["speed_1", "speed_2"])
+    assert node.pick_checkpoint("speed_1", "speed", saving=False) == "speed_1"
+    assert node.pick_checkpoint("", "speed", saving=True) == "speed_3"
+    assert node.pick_checkpoint(None, "speed", saving=False) == "speed_2"
+    assert node.pick_checkpoint(None, None, saving=True) is None  # legacy default checkpoint
