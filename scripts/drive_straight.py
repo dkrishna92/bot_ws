@@ -39,6 +39,9 @@ RAMP_RATE = 15.0  # % duty per second while looking for breakaway
 MAX_BREAKAWAY_WAIT_S = 1.0
 RAMP_DOWN_M = 0.15  # slow down over at least this, or 0.5 s at cruise speed if longer
 BRAKE_S = 0.5  # hold PWM low with the driver awake (G2 brake mode) before it sleeps
+# Braking deceleration for the stop-early prediction: a 2026-09-30 run
+# braked 0.15 m from ~1.2 m/s (~4.7 m/s^2). A little low = stops a touch short.
+BRAKE_DECEL = 4.0
 STALL_WINDOW_S = 0.5
 STALL_MIN_TICKS = 20  # a wheel moving fewer ticks than this per window after breakaway = stalled
 SETTLE_S = 0.7
@@ -98,7 +101,8 @@ def main():
                 x += ds * math.cos(math.radians(yaw))
                 y += ds * math.sin(math.radians(yaw))
 
-                if dist >= args.distance:
+                # Cut power early by the braking distance, so it stops AT the target
+                if dist + speed * speed / (2 * BRAKE_DECEL) >= args.distance:
                     break
                 if t > args.timeout:
                     reason = f"ABORTED: timeout after {args.timeout:.0f} s at {dist:.2f} m"
@@ -136,8 +140,10 @@ def main():
                         break
                     duty = max(breakaway, args.duty)
                     remaining = args.distance - dist
-                    if span > 0.2:
-                        speed = (moved_l + moved_r) / 2 * dl.M_PER_TICK / span
+                    # Speed over the last ~0.2 s (the 0.5 s stall window lags when slowing)
+                    ref = next((h for h in reversed(history) if t - h[0] >= 0.2), None)
+                    if ref is not None:
+                        speed = ((pl - ref[1]) + (pr - ref[2])) / 2 * dl.M_PER_TICK / (t - ref[0])
                     ramp_m = max(RAMP_DOWN_M, 0.5 * speed)
                     if remaining < ramp_m:
                         duty = breakaway + (duty - breakaway) * remaining / ramp_m
@@ -162,7 +168,7 @@ def main():
             reason = "ABORTED: Ctrl-C"
         except RuntimeError as e:
             reason = f"ABORTED: {e}"
-        dist_at_stop = dist
+        dist_at_stop, speed_at_stop = dist, speed
         motors.stop()
         fault_note = None
         if reason.startswith("ABORTED: motor driver fault"):
@@ -180,7 +186,9 @@ def main():
         print(f"  left wheel      {d_l:6.3f} m   ({sign * (left - l0):+d} ticks)")
         print(f"  right wheel     {d_r:6.3f} m   ({sign * (right - r0):+d} ticks)")
         print(f"  average         {(d_l + d_r) / 2:6.3f} m   (target {args.distance:.3f} m)")
-        print(f"  at motor stop   {dist_at_stop:6.3f} m   -> {(d_l + d_r) / 2 - dist_at_stop:.3f} m while braking")
+        braked = (d_l + d_r) / 2 - dist_at_stop
+        print(f"  at motor stop   {dist_at_stop:6.3f} m at {speed_at_stop:.2f} m/s -> {braked:.3f} m while braking"
+              + (f" ({speed_at_stop ** 2 / (2 * braked):.1f} m/s^2)" if braked > 0.01 and speed_at_stop > 0.2 else ""))
     except RuntimeError as e:
         print(f"  (no final encoder reading: {e})")
     print(f"  heading change  {yaw:+6.1f} deg (IMU, + = turned left)")
@@ -192,7 +200,10 @@ def main():
         print(f"  average duty    left {avg_l:.1f}%  right {avg_r:.1f}%"
               + ("  (open loop)" if args.open_loop else ""))
     if cruise_speeds:
-        cruise = sorted(cruise_speeds)[len(cruise_speeds) // 2]
+        # Second half only: the first includes the acceleration (a whole-run
+        # median read 8-16% low at 50-65% duty in a simulated check).
+        settled = cruise_speeds[len(cruise_speeds) // 2:]
+        cruise = sorted(settled)[len(settled) // 2]
         cruise_duty = max(breakaway, args.duty)
         print(f"  cruise speed    {cruise:6.2f} m/s at {cruise_duty:.0f}% duty "
               f"(motor_node max_linear_speed_mps {cruise / (cruise_duty / 100):.1f} if linear)")
