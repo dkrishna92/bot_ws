@@ -30,13 +30,15 @@
   <div class="row">
     <div class="panel">
       <div><button id="btnStart">Start (bringup)</button>
-        <label>on map <select id="raceMap"><option value="">(loading...)</option></select></label></div>
+        <label>on map <select id="raceMap"><option value="">(loading...)</option></select></label>
+        <label>Nav2 <select id="nav2Bringup"><option value="">(default)</option></select></label></div>
       <div><button id="btnStop" class="danger">Stop</button></div>
       <hr style="border-color:#444; width:100%;">
       <div><button id="btnMappingNew">Start New Mapping Run</button></div>
       <div><button id="btnMappingResume">Resume Mapping Run</button></div>
+      <div><label>Nav2 for autonomous mapping <select id="nav2Mapping"><option value="">(default)</option></select></label></div>
       <div><button id="btnMappingAuto">Start Autonomous Mapping Run</button> (Nav2 + frontier exploration drive the robot -- wheels down, e-stop in hand)</div>
-      <div>Initial pose for Resume (must match the robot's actual pose in the checkpoint when it was saved -- see <code>tf2_echo map base_link</code>):</div>
+      <div>Initial pose for Resume -- the robot's pose in the checkpoint's map. Filled in from the pose recorded at Save Checkpoint (for the checkpoint named below); edit only if the robot isn't back where it was when saved. <span id="poseSource"></span></div>
       <label>x <input type="number" id="poseX" value="0.0" step="0.1" style="width:5rem;"></label>
       <label>y <input type="number" id="poseY" value="0.0" step="0.1" style="width:5rem;"></label>
       <label>yaw (rad) <input type="number" id="poseYaw" value="0.0" step="0.1" style="width:5rem;"></label>
@@ -162,13 +164,27 @@ function loadMaps() {
   });
 }
 loadMaps();
+
+// Nav2 params variants installed with bot_bringup (default file first).
+fetch('/api/nav2_params').then(r => r.json()).then(d => {
+  for (const [id, files] of [['nav2Bringup', d.bringup], ['nav2Mapping', d.mapping]]) {
+    const sel = document.getElementById(id);
+    if (!files.length) continue;
+    sel.innerHTML = '';
+    for (const f of files) {
+      const opt = document.createElement('option');
+      opt.value = opt.textContent = f;
+      sel.appendChild(opt);
+    }
+  }
+});
 document.getElementById('raceMap').addEventListener('focus', loadMaps);
 document.getElementById('btnStart').addEventListener('click', () => {
   const map = document.getElementById('raceMap').value;
   fetch('/api/launch/bringup', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ map: map || null })
+    body: JSON.stringify({ map: map || null, nav2_params: document.getElementById('nav2Bringup').value || null })
   }).then(r => r.json()).then(s => { if (!s.ok) alert(s.message); });
 });
 document.getElementById('btnStop').addEventListener('click', () => fetch('/api/stop', { method: 'POST' }));
@@ -182,8 +198,10 @@ function startMapping(resume, autonomous = false) {
   fetch('/api/launch/mapping', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ resume: resume, pose: pose, autonomous: autonomous })
-  });
+    body: JSON.stringify({ resume: resume, pose: pose, autonomous: autonomous,
+                           name: document.getElementById('mapName').value.trim() || null,
+                           nav2_params: document.getElementById('nav2Mapping').value || null })
+  }).then(r => r.json()).then(s => { if (!s.ok) alert(s.message); });
 }
 document.getElementById('btnMappingNew').addEventListener('click', () => startMapping(false));
 document.getElementById('btnMappingResume').addEventListener('click', () => startMapping(true));
@@ -193,7 +211,7 @@ document.getElementById('btnMappingAuto').addEventListener('click', () => {
 
 function saveTo(endpoint) {
   const name = document.getElementById('mapName').value.trim();
-  fetch(endpoint, {
+  return fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: name || null })
@@ -201,7 +219,22 @@ function saveTo(endpoint) {
     .then(r => r.json())
     .then(s => { alert(s.message); loadMaps(); });
 }
-document.getElementById('btnSaveCheckpoint').addEventListener('click', () => saveTo('/api/save_checkpoint'));
+// Resume pose: fill x/y/yaw from the pose recorded with the named checkpoint.
+function loadCheckpointPose() {
+  const name = document.getElementById('mapName').value.trim();
+  fetch('/api/checkpoint_pose?name=' + encodeURIComponent(name)).then(r => r.json()).then(d => {
+    const src = document.getElementById('poseSource');
+    if (!d.pose) { src.textContent = '(no pose recorded for this checkpoint -- enter it by hand)'; return; }
+    document.getElementById('poseX').value = d.pose.x;
+    document.getElementById('poseY').value = d.pose.y;
+    document.getElementById('poseYaw').value = d.pose.yaw;
+    src.textContent = '(from checkpoint "' + (name || 'checkpoint') + '")';
+  });
+}
+loadCheckpointPose();
+document.getElementById('mapName').addEventListener('change', loadCheckpointPose);
+document.getElementById('btnSaveCheckpoint').addEventListener('click',
+  () => saveTo('/api/save_checkpoint').then(loadCheckpointPose));
 document.getElementById('btnSaveFinalMap').addEventListener('click', () => saveTo('/api/save_final_map'));
 
 // Status + speed defaults from the server, and periodic map refresh.

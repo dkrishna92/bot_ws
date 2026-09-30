@@ -20,6 +20,9 @@ alongside an rclpy node, serving a single-page dashboard with:
     so Nav2 + bot_explore's frontier_explore_node drive the robot around
     unexplored space by themselves (blank map, no resume). Heavier than
     teleop mapping -- runs the full Nav2 stack.
+  - Nav2 params pickers: which installed nav2_params*.yaml (bringup) /
+    nav2_mapping_params*.yaml (autonomous mapping) variant to launch with
+    (nav2_params_file:=), e.g. the MPPI controller.
   - Save Checkpoint: calls slam_toolbox's /slam_toolbox/serialize_map
     service (NOT save_map -- see the note below) to checkpoint the
     in-progress map without ending the mapping run, so Resume Mapping Run
@@ -49,9 +52,12 @@ alongside an rclpy node, serving a single-page dashboard with:
     patches where the old, undiscarded-looking but actually-gone map data
     used to be).
   - Set Initial Pose: x/y/yaw fields the dashboard sends as resume_pose --
-    this must be the robot's actual pose within the checkpoint map when it
-    was saved (e.g. from `ros2 run tf2_ros tf2_echo map base_link` at save
-    time), not an arbitrary value.
+    this must be the robot's actual pose within the checkpoint map. Save
+    Checkpoint records slam_toolbox's latest /pose next to the checkpoint
+    (<checkpoint>.pose.json) and the page fills these fields from it, so
+    as long as the robot is resumed from where it was when saved (or put
+    back there), nothing needs typing. Resume uses the checkpoint named in
+    the map-name field (default checkpoint if empty).
   - Map display: renders the latest /map (nav_msgs/OccupancyGrid) as a PNG,
     refreshed periodically by the page -- hand-rolled PNG encoder (stdlib
     zlib only) rather than adding a Pillow dependency for one feature.
@@ -77,6 +83,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import signal
 import struct
@@ -91,7 +98,7 @@ import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from nav_msgs.msg import OccupancyGrid
 from std_msgs.msg import String
 from slam_toolbox.srv import SaveMap, SerializePoseGraph
@@ -158,6 +165,11 @@ class WebControlNode(Node):
         # bringup.launch.py's amcl/map_server actually loads. Save Final
         # Map writes here.
         self.declare_parameter("map_save_path", "src/bot_bringup/config/maps/map")
+        # slam_toolbox's robot pose in the map frame (PoseWithCovarianceStamped,
+        # published per processed scan). Save Checkpoint records the latest
+        # one next to the checkpoint so Resume can reuse it -- see
+        # save_checkpoint.
+        self.declare_parameter("slam_pose_topic", "/pose")
 
         self._linear_speed = self.get_parameter("default_linear_speed").value
         self._angular_speed = self.get_parameter("default_angular_speed").value
@@ -188,6 +200,9 @@ class WebControlNode(Node):
             durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
         )
         self.create_subscription(OccupancyGrid, "map", self._on_map, map_qos)
+        self._latest_pose: tuple[float, float, float, float] | None = None  # x, y, yaw, monotonic time
+        self.create_subscription(PoseWithCovarianceStamped, self.get_parameter("slam_pose_topic").value,
+                                 self._on_slam_pose, 10)
         self.create_timer(0.1, self._teleop_watchdog_tick)
 
         node = self
@@ -225,6 +240,12 @@ class WebControlNode(Node):
                     self.send_header("Cache-Control", "no-store")
                     self.end_headers()
                     self.wfile.write(png)
+                elif self.path.startswith("/api/checkpoint_pose"):
+                    from urllib.parse import parse_qs, urlparse
+                    name = (parse_qs(urlparse(self.path).query).get("name") or [""])[0]
+                    self._send_json({"pose": node.checkpoint_pose(name)})
+                elif self.path.startswith("/api/nav2_params"):
+                    self._send_json(node.list_nav2_params())
                 elif self.path.startswith("/api/maps"):
                     self._send_json({"maps": node.list_maps()})
                 elif self.path.startswith("/api/status"):
@@ -247,7 +268,8 @@ class WebControlNode(Node):
                     self._send_json({"ok": True})
                 elif self.path == "/api/launch/bringup":
                     body = self._read_json()
-                    ok, msg = node.start_launch("bringup", map_name=body.get("map"))
+                    ok, msg = node.start_launch("bringup", map_name=body.get("map"),
+                                                nav2_params=body.get("nav2_params"))
                     self._send_json({"ok": ok, "message": msg})
                 elif self.path == "/api/launch/mapping":
                     body = self._read_json()
@@ -255,7 +277,9 @@ class WebControlNode(Node):
                         "mapping",
                         resume=bool(body.get("resume", False)),
                         resume_pose=body.get("pose"),
+                        checkpoint_name=body.get("name"),
                         autonomous=bool(body.get("autonomous", False)),
+                        nav2_params=body.get("nav2_params"),
                     )
                     self._send_json({"ok": ok, "message": msg})
                 elif self.path == "/api/save_checkpoint":
@@ -417,6 +441,44 @@ class WebControlNode(Node):
                 names.append(f[:-len(".yaml")])
         return sorted(names, key=lambda n: (n != "map", n.lower()))
 
+    def list_nav2_params(self) -> dict[str, list[str]]:
+        """Nav2 params files installed with bot_bringup -- what its launches
+        can actually load (nav2_params_file:= is resolved in its share dir):
+        'bringup' = nav2_params*.yaml, 'mapping' = nav2_mapping_params*.yaml,
+        each with the launch's own default first."""
+        try:
+            from ament_index_python.packages import get_package_share_directory
+            files = os.listdir(os.path.join(get_package_share_directory("bot_bringup"), "config"))
+        except (LookupError, OSError):
+            return {"bringup": [], "mapping": []}
+        out = {}
+        for target, prefix in (("bringup", "nav2_params"), ("mapping", "nav2_mapping_params")):
+            names = [f for f in files if f.startswith(prefix) and f.endswith(".yaml")]
+            out[target] = sorted(names, key=lambda f: (f != f"{prefix}.yaml", f))
+        return out
+
+    def _on_slam_pose(self, msg: PoseWithCovarianceStamped) -> None:
+        p, q = msg.pose.pose.position, msg.pose.pose.orientation
+        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        self._latest_pose = (p.x, p.y, yaw, time.monotonic())
+
+    def _ws_path(self, path: str) -> str:
+        """Workspace-relative path -> absolute (when workspace_root is set)."""
+        return os.path.join(self._workspace_root, path) if self._workspace_root else path
+
+    def checkpoint_pose(self, name: str | None) -> dict | None:
+        """The robot's map pose recorded when checkpoint `name` (default
+        checkpoint if empty) was saved, or None if there's no record."""
+        path, err = self._resolve_map_name(name, self._checkpoint_path)
+        if err:
+            return None
+        try:
+            with open(self._ws_path(path) + ".pose.json") as f:
+                pose = json.load(f)
+            return {k: float(pose[k]) for k in ("x", "y", "yaw")}
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
     def save_checkpoint(self, name: str | None):
         """Checkpoint the in-progress map via slam_toolbox's serialize_map
         service -- does not stop mapping. Unlike save_map (a flattened
@@ -436,7 +498,21 @@ class WebControlNode(Node):
         ok, err = self._call_and_wait(self._serialize_client, request, "slam_toolbox serialize_map")
         if not ok:
             return False, err
-        return True, f"saved checkpoint '{path}' (resumable via Resume Mapping Run)"
+        # Record where the robot is in this map right now: resuming needs
+        # the robot's pose in the checkpoint's map frame (map_start_pose),
+        # which isn't readable back out of the serialized pose graph. Leave
+        # the robot here (or put it back) and Resume uses this pose.
+        pose = self._latest_pose
+        if pose is None or time.monotonic() - pose[3] > 5.0:
+            return True, (f"saved checkpoint '{path}' -- but no recent slam pose to record, "
+                          "so enter the resume pose by hand")
+        try:
+            with open(self._ws_path(path) + ".pose.json", "w") as f:
+                json.dump({"x": round(pose[0], 3), "y": round(pose[1], 3), "yaw": round(pose[2], 3)}, f)
+        except OSError as exc:
+            return True, f"saved checkpoint '{path}' -- but couldn't record the pose ({exc})"
+        return True, (f"saved checkpoint '{path}' at pose x={pose[0]:.2f} y={pose[1]:.2f} "
+                      f"yaw={pose[2]:.2f} -- Resume will start from there")
 
     def save_final_map(self, name: str | None):
         """Export the current map via slam_toolbox's save_map service --
@@ -458,7 +534,8 @@ class WebControlNode(Node):
         return True, f"saved final map as '{path}' (ready for bringup.launch.py)"
 
     def start_launch(self, target: str, resume: bool = False, resume_pose: str | None = None,
-                     autonomous: bool = False, map_name: str | None = None):
+                     autonomous: bool = False, map_name: str | None = None,
+                     nav2_params: str | None = None, checkpoint_name: str | None = None):
         with self._lock:
             if self._proc is not None and self._proc.poll() is None:
                 return False, f"'{self._proc_label}' is already running -- stop it first"
@@ -472,6 +549,12 @@ class WebControlNode(Node):
             if map_name not in self.list_maps():
                 return False, f"no saved map named {map_name!r}"
             cmd.append(f"map:={os.path.abspath(os.path.join(self._maps_dir(), map_name + '.yaml'))}")
+        # Nav2 variant (e.g. the MPPI controller). Teleop mapping doesn't
+        # run Nav2 at all, so it's only passed where Nav2 actually starts.
+        if nav2_params and (target == "bringup" or autonomous):
+            if nav2_params not in self.list_nav2_params()[target]:
+                return False, f"no installed {target} Nav2 params file {nav2_params!r}"
+            cmd.append(f"nav2_params_file:={nav2_params}")
         if target == "mapping":
             # Default: this tool's own teleop feature is what you'd drive it
             # with (mapping.launch.py skips Nav2 and frontier_explore_node).
@@ -480,12 +563,20 @@ class WebControlNode(Node):
             if not autonomous:
                 cmd.append("teleop:=true")
             if resume:
+                # Which checkpoint: checkpoint_name (same bare-name rules as
+                # saving), default checkpoint if empty.
+                ckpt, err = self._resolve_map_name(checkpoint_name, self._checkpoint_path)
+                if err:
+                    return False, err
                 # resume_pose is forwarded as-is (mapping.launch.py parses
-                # "x,y,yaw" itself) -- must be the robot's actual pose in
-                # the checkpoint map when it was saved, not arbitrary; see
-                # this file's module docstring.
-                pose = resume_pose or "0.0,0.0,0.0"
-                cmd.append(f"resume_map:={self._checkpoint_path}")
+                # "x,y,yaw" itself) -- must be the robot's actual pose in the
+                # checkpoint's map. Explicit pose wins; otherwise the pose
+                # recorded when the checkpoint was saved.
+                pose = resume_pose
+                if not pose:
+                    saved = self.checkpoint_pose(checkpoint_name)
+                    pose = f"{saved['x']},{saved['y']},{saved['yaw']}" if saved else "0.0,0.0,0.0"
+                cmd.append(f"resume_map:={ckpt}")
                 cmd.append(f"resume_pose:={pose}")
         try:
             # New session/process group so Stop can kill every descendant

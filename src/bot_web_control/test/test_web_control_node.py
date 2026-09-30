@@ -44,6 +44,7 @@ def _make_node(linear_speed=0.3, angular_speed=1.0):
     node._checkpoint_path = "src/bot_bringup/config/maps/checkpoint"
     node._map_save_path = "src/bot_bringup/config/maps/map"
     node._cmd_pub = _FakePublisher()
+    node._latest_pose = None
     # __new__ skips Node.__init__, so there's no real logger to return.
     node.get_logger = lambda: _FakeLogger()
     return node
@@ -450,3 +451,132 @@ def test_start_launch_bringup_rejects_unknown_map(tmp_path, monkeypatch):
 
     assert ok is False
     assert "no saved map" in msg
+
+
+def _fake_share(tmp_path, monkeypatch, files):
+    share = tmp_path / "share"
+    (share / "config").mkdir(parents=True)
+    for f in files:
+        (share / "config" / f).write_text("{}\n")
+    monkeypatch.setattr("ament_index_python.packages.get_package_share_directory", lambda pkg: str(share))
+
+
+def test_list_nav2_params_splits_bringup_and_mapping_default_first(tmp_path, monkeypatch):
+    _fake_share(tmp_path, monkeypatch, ["nav2_params_mppi.yaml", "nav2_params.yaml",
+                                        "nav2_mapping_params_mppi.yaml", "nav2_mapping_params.yaml",
+                                        "ekf_params.yaml"])
+    node = _make_node()
+    assert node.list_nav2_params() == {
+        "bringup": ["nav2_params.yaml", "nav2_params_mppi.yaml"],
+        "mapping": ["nav2_mapping_params.yaml", "nav2_mapping_params_mppi.yaml"],
+    }
+
+
+def test_autonomous_mapping_passes_chosen_nav2_params(tmp_path, monkeypatch):
+    _fake_share(tmp_path, monkeypatch, ["nav2_mapping_params.yaml", "nav2_mapping_params_mppi.yaml"])
+    node = _make_node()
+    captured = {}
+    monkeypatch.setattr("bot_web_control.web_control_node.subprocess.Popen",
+                        lambda cmd, **kw: _FakePopen(captured.setdefault("cmd", cmd), **kw))
+
+    ok, _ = node.start_launch("mapping", autonomous=True, nav2_params="nav2_mapping_params_mppi.yaml")
+
+    assert ok is True
+    assert "nav2_params_file:=nav2_mapping_params_mppi.yaml" in captured["cmd"]
+
+
+def test_teleop_mapping_ignores_nav2_params(tmp_path, monkeypatch):
+    _fake_share(tmp_path, monkeypatch, ["nav2_mapping_params_mppi.yaml"])
+    node = _make_node()
+    captured = {}
+    monkeypatch.setattr("bot_web_control.web_control_node.subprocess.Popen",
+                        lambda cmd, **kw: _FakePopen(captured.setdefault("cmd", cmd), **kw))
+
+    ok, _ = node.start_launch("mapping", nav2_params="nav2_mapping_params_mppi.yaml")
+
+    assert ok is True
+    assert not any(a.startswith("nav2_params_file:=") for a in captured["cmd"])
+
+
+def test_bringup_rejects_mapping_params_file(tmp_path, monkeypatch):
+    _fake_share(tmp_path, monkeypatch, ["nav2_params.yaml", "nav2_mapping_params.yaml"])
+    node = _make_node()
+    monkeypatch.setattr("bot_web_control.web_control_node.subprocess.Popen",
+                        lambda cmd, **kw: pytest.fail("must not launch"))
+
+    ok, msg = node.start_launch("bringup", nav2_params="nav2_mapping_params.yaml")
+
+    assert ok is False
+
+
+def _checkpoint_node(tmp_path):
+    node = _make_node()
+    node._workspace_root = str(tmp_path)
+    (tmp_path / "src" / "bot_bringup" / "config" / "maps").mkdir(parents=True)
+    node._serialize_client = None  # never called: _call_and_wait is stubbed below
+    node._call_and_wait = lambda client, request, label: (True, None)  # serialize_map "succeeds"
+    return node
+
+
+def test_save_checkpoint_records_the_slam_pose_for_resume(tmp_path):
+    import time as _time
+    node = _checkpoint_node(tmp_path)
+    node._latest_pose = (1.234, -2.5, 0.75, _time.monotonic())
+
+    ok, msg = node.save_checkpoint("lap1")
+
+    assert ok is True and "x=1.23" in msg
+    assert node.checkpoint_pose("lap1") == {"x": 1.234, "y": -2.5, "yaw": 0.75}
+    assert node.checkpoint_pose(None) is None  # default checkpoint has no record
+
+
+def test_save_checkpoint_without_a_recent_pose_says_so(tmp_path):
+    node = _checkpoint_node(tmp_path)
+
+    ok, msg = node.save_checkpoint("lap1")
+
+    assert ok is True and "by hand" in msg
+    assert node.checkpoint_pose("lap1") is None
+
+
+def test_resume_uses_named_checkpoint_and_its_recorded_pose(tmp_path, monkeypatch):
+    import time as _time
+    node = _checkpoint_node(tmp_path)
+    node._latest_pose = (1.0, 2.0, 0.5, _time.monotonic())
+    node.save_checkpoint("lap1")
+    captured = {}
+    monkeypatch.setattr("bot_web_control.web_control_node.subprocess.Popen",
+                        lambda cmd, **kw: _FakePopen(captured.setdefault("cmd", cmd), **kw))
+
+    ok, _ = node.start_launch("mapping", resume=True, checkpoint_name="lap1")
+
+    assert ok is True
+    assert "resume_map:=src/bot_bringup/config/maps/lap1" in captured["cmd"]
+    assert "resume_pose:=1.0,2.0,0.5" in captured["cmd"]
+
+
+def test_explicit_resume_pose_overrides_the_recorded_one(tmp_path, monkeypatch):
+    import time as _time
+    node = _checkpoint_node(tmp_path)
+    node._latest_pose = (1.0, 2.0, 0.5, _time.monotonic())
+    node.save_checkpoint(None)
+    captured = {}
+    monkeypatch.setattr("bot_web_control.web_control_node.subprocess.Popen",
+                        lambda cmd, **kw: _FakePopen(captured.setdefault("cmd", cmd), **kw))
+
+    node.start_launch("mapping", resume=True, resume_pose="3,4,0")
+
+    assert "resume_pose:=3,4,0" in captured["cmd"]
+
+
+def test_slam_pose_yaw_from_quaternion():
+    import math
+    from geometry_msgs.msg import PoseWithCovarianceStamped
+    node = _make_node()
+    msg = PoseWithCovarianceStamped()
+    msg.pose.pose.position.x, msg.pose.pose.position.y = 1.5, -0.5
+    msg.pose.pose.orientation.z, msg.pose.pose.orientation.w = math.sin(0.6), math.cos(0.6)  # yaw 1.2
+
+    node._on_slam_pose(msg)
+
+    assert node._latest_pose[:3] == pytest.approx((1.5, -0.5, 1.2))
