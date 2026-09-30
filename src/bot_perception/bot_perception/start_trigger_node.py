@@ -7,10 +7,19 @@ publishes a latched Bool on start_signal once the course's start-signal arm
 (see bot_gazebo's start_signal_arms model / scripts/start_signal.py) is
 observed flipping from red to green.
 
-Detecting an actual red->green *transition* (both a red baseline and a
-green confirmation, held for confirm_frames consecutive frames) rather than
-just thresholding on green avoids false-triggering on a stray green pixel
-in the background before the real signal flips.
+Detecting an actual red->green *transition* rather than just thresholding
+on green avoids false-triggering before the real signal flips. The node
+only arms after (1) warmup_s of frames -- the OAK's auto-exposure washes
+the first frames out -- and (2) red_confirm_frames consecutive red
+frames; then confirm_frames consecutive green frames trigger. Both guards
+came from the first real-signal test (2026-09-29, scripts/
+test_start_signal.py): a washed-out first frame made the signal's blue
+board read as 83% "green" and would have started the race at launch. The
+real signal is a blue board with a green disc above a red one, so the
+green hue range also stops at 80 (the board measured hue 100-105, drifting
+to ~90 when overexposed). If the node starts while the signal already
+shows green, it waits for red first -- it will not start on a signal it
+never saw change.
 
 This node only handles detection -- bot_navigation's lap_navigator_node
 subscribes to start_signal and owns actually sending Nav2 the race route,
@@ -26,6 +35,8 @@ ranges against actual ambient lighting and the camera's color response
 before race day.
 """
 from __future__ import annotations
+
+import time
 
 import cv2
 import numpy as np
@@ -55,7 +66,9 @@ class StartTriggerNode(Node):
         # measured well under a floor of 80 (which detected only 0.3% of
         # the green arm vs 25.5% at these bounds).
         self.declare_parameter("green_hsv_lower", [35, 60, 40])
-        self.declare_parameter("green_hsv_upper", [90, 255, 255])
+        # Upper hue 80, not 90: the real signal's blue board (hue 100-105)
+        # drifted to ~90 when overexposed and read as green.
+        self.declare_parameter("green_hsv_upper", [80, 255, 255])
         # Red wraps around hue 0/180 in OpenCV's 0-180 hue range, so it
         # needs two ranges (one near 0, one near 180) rather than one.
         self.declare_parameter("red_hsv_lower1", [0, 60, 40])
@@ -67,6 +80,11 @@ class StartTriggerNode(Node):
         # a single-frame flicker/misread into a real transition, similar in
         # spirit to feather_ws's switch debounce (see CLAUDE.md).
         self.declare_parameter("confirm_frames", 3)
+        # Arming guards -- see the module docstring. Frames during warmup_s
+        # (from the first frame) are ignored; then red must be seen for
+        # red_confirm_frames in a row before green can trigger.
+        self.declare_parameter("warmup_s", 2.0)
+        self.declare_parameter("red_confirm_frames", 3)
         self.declare_parameter("image_topic", "/oak/rgb/image_raw")
 
         self._roi = self.get_parameter("roi").value
@@ -78,10 +96,15 @@ class StartTriggerNode(Node):
         self._red_upper2 = np.array(self.get_parameter("red_hsv_upper2").value)
         self._threshold = self.get_parameter("detect_threshold").value
         self._confirm_frames = self.get_parameter("confirm_frames").value
+        self._warmup_s = self.get_parameter("warmup_s").value
+        self._red_confirm_frames = self.get_parameter("red_confirm_frames").value
 
         self._bridge = CvBridge()
         self._latched = False
         self._green_streak = 0
+        self._red_streak = 0
+        self._armed = False
+        self._first_frame_time: float | None = None
 
         # transient_local + depth 1 makes this an actually latched topic --
         # a subscriber started after the trigger already fired (e.g. a BT
@@ -126,6 +149,28 @@ class StartTriggerNode(Node):
         """Green-channel fraction in the ROI."""
         return self._color_fraction(self._roi_hsv(frame), self._green_lower, self._green_upper)
 
+    def _update(self, green_frac: float, red_frac: float, now: float) -> bool:
+        """One frame's colour fractions -> True when the start should fire.
+        The whole trigger rule lives here so scripts/test_start_signal.py can
+        run exactly this against the real camera."""
+        if self._first_frame_time is None:
+            self._first_frame_time = now
+        if now - self._first_frame_time < self._warmup_s:
+            self._red_streak = self._green_streak = 0
+            return False
+        # A colour counts only if the other one is absent -- a stray green
+        # reflection next to a still-red signal can't read as "green".
+        is_red = red_frac > self._threshold and green_frac <= self._threshold
+        is_green = green_frac > self._threshold and red_frac <= self._threshold
+        if not self._armed:
+            self._red_streak = self._red_streak + 1 if is_red else 0
+            if self._red_streak >= self._red_confirm_frames:
+                self._armed = True
+                self.get_logger().info("Start signal reads RED -- armed, waiting for green.")
+            return False
+        self._green_streak = self._green_streak + 1 if is_green else 0
+        return self._green_streak >= self._confirm_frames
+
     def _on_image(self, msg: Image) -> None:
         if self._latched:
             return
@@ -135,14 +180,7 @@ class StartTriggerNode(Node):
         green_frac = self._color_fraction(hsv, self._green_lower, self._green_upper)
         red_frac = self._red_fraction(hsv)
 
-        # Require the arm to actually read as green AND no longer read as
-        # red -- not just "some green pixels appeared somewhere in the
-        # ROI" -- so a stray green reflection/background object next to a
-        # still-red arm can't false-trigger the start.
-        transitioning = green_frac > self._threshold and red_frac <= self._threshold
-        self._green_streak = self._green_streak + 1 if transitioning else 0
-
-        if self._green_streak >= self._confirm_frames:
+        if self._update(green_frac, red_frac, time.monotonic()):
             self._latched = True
             self.get_logger().info(
                 f"Start signal red->green confirmed (green={green_frac:.2f}, "
@@ -161,6 +199,9 @@ class StartTriggerNode(Node):
         """Call before a new run (e.g. from a service or a course-reset topic)."""
         self._latched = False
         self._green_streak = 0
+        self._red_streak = 0
+        self._armed = False
+        self._first_frame_time = None
         self._subscribe()
 
 
