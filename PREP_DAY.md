@@ -40,21 +40,31 @@ stack, and the encoder divider rewiring.
 
 ## Before the field (bench, wheels off the ground, about 1 h)
 
-1. Laptop and Pi on the same network. On the laptop run `scripts/find_pi.sh --update`,
-   then pull or sync the latest `race_day_prep` onto the Pi.
-2. `sudo ~/bot_ws/scripts/setup_pi.sh`, reboot, then `scripts/check_hardware.sh`.
+1. **Put the Pi on the race-day router's Wi-Fi.** On the Pi, with the router
+   powered up (use the current network or a monitor + keyboard to get in):
+   ```bash
+   sudo nmcli dev wifi connect "<router SSID>" password "<router password>"
+   nmcli connection show            # the router's network should be listed
+   ```
+   NetworkManager remembers it and reconnects automatically. The Pi keeps its
+   old networks too. On the router, give the Pi a **fixed address** (DHCP
+   reservation for its Wi-Fi MAC, shown by `ip link show wlan0`) so you
+   don't have to hunt for it on race day. Connect the laptop to the router
+   too, then run `scripts/find_pi.sh --update`.
+2. Pull or sync the latest `race_day_prep` onto the Pi.
+3. `sudo ~/bot_ws/scripts/setup_pi.sh`, reboot, then `scripts/check_hardware.sh`.
    Every line must say OK.
-3. `scripts/motor_test.py`: four OKs. **Watch** both wheels spin forward on
+4. `scripts/motor_test.py`: four OKs. **Watch** both wheels spin forward on
    "forward".
-4. E-stop:
+5. E-stop:
    - Power the robot off and on from the battery 3 times. The Arduino should
      recover by itself within about 5 s each time (`check_hardware.sh`).
    - Run `scripts/estop_link_log.py` and press the kill switch. It should log
      a dropout, and the motors should stop.
-5. IMU sign: start mapping from the dashboard, run `scripts/check_heading.py`,
+6. IMU sign: start mapping from the dashboard, run `scripts/check_heading.py`,
    and turn the robot 90° left by hand. Every source should read **positive**.
    If it reports "imu orient: OPPOSITE SIGN", fix that before mapping.
-6. Solder or tape the LoRa module wiring. Mount both antennas high and
+7. Solder or tape the LoRa module wiring. Mount both antennas high and
    vertical, clear of the frame.
 
 ## On the field

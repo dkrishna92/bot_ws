@@ -1,5 +1,24 @@
 # Race-Day Commands (manual fallback)
 
+## Packing list
+
+- [ ] Power strip
+- [ ] Wi-Fi router (the Pi must already know its network -- see PREP_DAY.md "Before the field")
+- [ ] 4 charged robot batteries + battery charger
+- [ ] Laptop + laptop charger
+- [ ] Hex keys, screwdriver
+- [ ] 9 V batteries
+- [ ] Water, power bars
+
+Also worth packing (from what this robot has needed so far):
+- [ ] Kill-switch transmitter (Feather) + its power, and the spare LoRa antennas
+- [ ] USB cables for the Teensy, Arduino, OAK-D and lidar (+ a spare)
+- [ ] Masking tape (to mark the race start spot) and a marker
+- [ ] Zip ties, electrical tape
+- [ ] Multimeter
+- [ ] Phone (the dashboard works in its browser)
+- [ ] The wired e-stop's RJ45 cable, if the course interface needs ours
+
 Raw terminal commands to run the robot on race day **without** the web
 control dashboard (`bot_web_control`), in case the UI is unavailable. Every
 command here is what that dashboard runs for you under the hood.
