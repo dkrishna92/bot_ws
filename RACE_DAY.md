@@ -14,6 +14,11 @@ cutting motor power) — nothing below is a substitute for it.
 cd ~/bot_ws
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
+# Keep other teams' ROS 2 robots on the same Wi-Fi out of ours (and ours
+# out of theirs). Set these in EVERY shell, including the one that starts
+# the dashboard. Laptop RViz can't see the robot's topics while they're set.
+export ROS_DOMAIN_ID=73
+export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 ```
 
 ## 0. Reach the Pi (from the laptop)
@@ -86,6 +91,9 @@ Useful extra args (all optional):
 |-----|---------|---------|
 | `course:=` | `speed_course_cfr` | `speed_course_cfr` or `obstacle_course_cfr` |
 | `map:=` | `map` | Saved map name in `config/maps` (e.g. `Test`) or a full path to its `.yaml` |
+| `initial_pose:=` | *(map's `<map>.start.yaml`)* | AMCL start pose `x,y,yaw`; default is the pose recorded with the map, else `nav2_params.yaml` |
+| `route:=` | *(map's `<map>.route.yaml`)* | Race route recorded on that map (dashboard **Add checkpoint here**) |
+| `max_speed:=` / `max_turn:=` | `0` (no cap) | Cap Nav2 speed (m/s) / turn rate (rad/s) for the first slow laps |
 | `num_laps:=` | `0` | `0` = course default (3 speed / 2 obstacle); override to force a lap count |
 | `rviz:=` | `true` | Auto-skipped when there's no display or RViz isn't installed |
 | `nav2_params_file:=` | `nav2_params.yaml` | Swap Nav2 planner/controller variant (see CLAUDE.md) |
@@ -101,6 +109,17 @@ scripts/check_hardware.sh --topics
 
 Checks `/scan`, `/odom`, `/imu`, `/oak/points`, `/odometry/filtered` are
 publishing while the launch above runs.
+
+**Then confirm the robot knows where it is (before every start):**
+
+```bash
+scripts/check_localization.py     # must end "OK: localized"
+```
+
+NOT LOCALIZED means AMCL's start pose doesn't match where the robot is:
+put it on the marked start spot, and check the launch log line `AMCL starts
+at ... from ...`. Every node can report healthy while it's wrong. Also check
+the launch log says `Race route: ...<map>.route.yaml`, not "No route file".
 
 ## 5. Starting the run
 
@@ -219,6 +238,8 @@ surface** (tile ~40% duty; carpet far more) and set `motor_node`'s
 | Nothing publishing | `scripts/check_hardware.sh --topics` while the launch runs |
 | Launch dies right after start | Check the log for `FATAL` (map yaml's `image:` must match the `.pgm` next to it) |
 | Map smeared / rotated copies | `/imu` wasn't publishing — check `check_hardware.sh --topics`, rebuild the map |
+| Bringup "works" but the robot heads into bales | `scripts/check_localization.py` -- wrong start pose; full guide in PREP_DAY.md "If bringup fails" |
+| Lanes mapped in the wrong direction | While mapping, run `scripts/check_heading.py` and turn the robot ~90° left: it names the source that disagrees (IMU orientation vs gyro, EKF, or slam_toolbox's scan matcher). Then map slower (especially turns) and tune in the dashboard's **SLAM settings** |
 | E-stop relay clicking / motors cut randomly | Radio link dropping heartbeats — `scripts/estop_link_log.py`; raise/move the antennas |
 | `check_hardware.sh`: e-stop Nano `303a:1001` | Stuck in ROM download mode — `python3 scripts/estop_recover.py` or its reset button |
 | Robot won't turn in place | Below breakaway power on this surface — `scripts/rotate.py`, raise `min_turn_duty_cycle` |

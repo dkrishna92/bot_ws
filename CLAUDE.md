@@ -739,6 +739,45 @@ Four related hardware-integration pieces landed together:
   (one USB cable, one node). Trigger/echo pin assignment is still a
   placeholder (see Open items).
 
+## Prep-day changes (2026-10-01, sim-tested only -- verify on the robot)
+
+See PREP_DAY.md for the field plan, the mapping fallback ladder (A', B =
+race on the live slam map, C = robotics-challenge-2026 gap follower) and
+the "if bringup fails" guide.
+
+- **Routes and start poses belong to a map:** `config/maps/<map>.route.yaml`
+  (checkpoints, recorded with the dashboard's "Add checkpoint here") and
+  `<map>.start.yaml` ("Set race start pose here"). bringup pairs them with
+  `map:=` automatically (`route:=` / `initial_pose:=` override).
+  lap_navigator's built-in `_COURSE_CHECKPOINTS` are from an older sim map
+  frame and are wrong on the real course (and on the current sim map).
+- **lap_navigator resumes after a Nav2 abort** from the first unreached
+  checkpoint (max_retries 5, 3 s apart) instead of stopping for the race.
+- **Nav2 footprint is the real rectangle** `[[+-0.225, +-0.19]]` + 0.02
+  padding in all 9 params files, not `robot_radius: 0.26`: the circle was
+  7 cm too wide per side and the sim planner refused a lane the robot had
+  just driven through by teleop.
+- **Speed caps** `max_speed:=`/`max_turn:=` (bringup and mapping) write a
+  capped copy of the Nav2 params (controller, velocity smoother, spin).
+- **Plan B** `mapping.launch.py race:=true route:=<name>`: live slam
+  map + Nav2 + start trigger + lap_navigator (dashboard button).
+- **bringup no longer forces `ROS_DOMAIN_ID=0`** -- it cut the dashboard off
+  on any other domain. Race day: unusual `ROS_DOMAIN_ID` +
+  `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST` (RACE_DAY.md).
+- **`scripts/check_localization.py`** scores lidar-vs-map at AMCL's pose
+  (82% localized vs 2% with a deliberately wrong pose in the sim) -- run
+  before every start. Map-frame poses can't be compared with Gazebo's
+  world frame (the sim map's origin is near the spawn).
+- Dashboard: SLAM settings (`config/slam_toolbox_overrides.yaml`, loaded via
+  `slam_params_overrides:=`), live cmd_vel/pose, topic reader (blocks
+  `/oak/` and `/scan`), Nav2 variant pickers, resume pose saved with each
+  checkpoint.
+- `scripts/check_heading.py` compares IMU orientation / IMU gyro / wheels /
+  EKF / slam heading during a hand turn.
+- Laptop-only gotcha: building with the repo's `.venv` active puts
+  `#!.../.venv/bin/python` in the installed node scripts (works, but the Pi
+  must build with system python -- setup_pi.sh does).
+
 ## Pi 5 race deployment (2026-09-25)
 
 - **GPIO library is `lgpio`, not pigpio/RPi.GPIO.** pigpio doesn't support
