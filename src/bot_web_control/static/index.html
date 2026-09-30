@@ -29,6 +29,18 @@
   details.slam input { width: 6rem; }
   details.slam tr.changed td:first-child { color: #fc6; }
   details.slam .hint { color: #999; font-size: 0.75rem; max-width: 22rem; }
+  .controls { max-width: 34rem; }
+  .teleop { max-width: 18rem; }
+  #startPose { font-size: 0.8rem; }
+  .stopbar { margin-bottom: 0.5rem; }
+  .stopbar button { font-weight: bold; }
+  .step { border: 1px solid #444; border-radius: 6px; padding: 0.4rem 0.75rem 0.75rem; margin-top: 0.75rem; }
+  .step h2 { font-size: 1.05rem; margin: 0.2rem 0 0.4rem; color: #9cf; }
+  .step h3 { font-size: 0.9rem; margin: 0.8rem 0 0.2rem; color: #ccc; border-top: 1px dashed #444; padding-top: 0.4rem; }
+  .note { font-size: 0.8rem; color: #aaa; }
+  .posefields label { display: inline-block; margin-right: 0.5rem; }
+  .choice { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.5rem; }
+  .choice > div { flex: 1 1 14rem; border: 1px solid #3a3a3a; border-radius: 6px; padding: 0.5rem; }
   #topicOut { max-width: 480px; max-height: 360px; overflow: auto; font-size: 0.8rem;
               background: #1a1a1a; border: 1px solid #444; padding: 0.5rem; white-space: pre; }
 </style>
@@ -38,51 +50,86 @@
   <div id="status">status: loading...</div>
 
   <div class="row">
-    <div class="panel">
-      <div><label>Nav2 speed cap (bringup, autonomous mapping, Plan B race; blank = full speed):
-        <input type="number" id="capSpeed" min="0" step="0.1" placeholder="m/s" style="width:5rem;">
-        <input type="number" id="capTurn" min="0" step="0.1" placeholder="rad/s" style="width:5rem;"></label></div>
-      <div><button id="btnStart">Start (bringup)</button>
-        <label>on map <select id="raceMap"><option value="">(loading...)</option></select></label>
-        <label>Nav2 <select id="nav2Bringup"><option value="">(default)</option></select></label></div>
-      <div><button id="btnStop" class="danger">Stop</button></div>
-      <hr style="border-color:#444; width:100%;">
-      <div><button id="btnMappingNew">Start New Mapping Run</button></div>
-      <div><button id="btnMappingResume">Resume Mapping Run</button></div>
-      <div><label>Nav2 for autonomous mapping <select id="nav2Mapping"><option value="">(default)</option></select></label></div>
-      <details class="slam">
-        <summary>SLAM settings (slam_toolbox -- applied at the next mapping start)</summary>
-        <div>Changed values are highlighted; the default is shown on the right.</div>
-        <table><tbody id="slamKey"></tbody></table>
-        <details><summary>all other parameters</summary><table><tbody id="slamRest"></tbody></table></details>
-        <button id="btnSlamSave">Save SLAM settings</button><button id="btnSlamReset">Reset to defaults</button>
-      </details>
-      <div><button id="btnMappingAuto">Start Autonomous Mapping Run</button> (Nav2 + frontier exploration drive the robot -- wheels down, e-stop in hand)</div>
-      <div><button id="btnRaceLive">Race on live map (Plan B)</button> (no saved map: slam_toolbox live + the route recorded under Map name; start on the marked start spot)</div>
-      <label>Checkpoint name (one per good section, e.g. speed_1, speed_2 -- Save Checkpoint writes it, Resume reloads it)
-        <input type="text" id="ckptName" list="ckptList" placeholder="checkpoint" style="width:12rem;">
-        <datalist id="ckptList"></datalist>
-      </label>
-      <div><button id="btnSaveCheckpoint">Save Checkpoint (to resume later)</button></div>
-      <div>Current bot pose if different than saved <span id="poseSource"></span></div>
-      <label>x <input type="number" id="poseX" value="0.0" step="0.1" style="width:5rem;"></label>
-      <label>y <input type="number" id="poseY" value="0.0" step="0.1" style="width:5rem;"></label>
-      <label>yaw (rad) <input type="number" id="poseYaw" value="0.0" step="0.1" style="width:5rem;"></label>
-      <hr style="border-color:#444; width:100%;">
-      <label>Map name (the course, e.g. speed -- Save Final Map, the route and the start pose all use it)
-        <input type="text" id="mapName" placeholder="map" style="width:12rem;">
-      </label>
-      <div><button id="btnSaveFinalMap">Save Final Map (for racing)</button></div>
-      <hr style="border-color:#444; width:100%;">
-      <div>Race route for this map name (<span id="routeFile">map.route.yaml</span>): <b id="routeCount">0</b> checkpoints</div>
-      <div>Race start pose: <span id="startPose" class="live">none</span> <button id="btnStartPose">Set race start pose here</button></div>
-      <div><button id="btnRouteAdd">Add checkpoint here</button><button id="btnRouteUndo">Undo last</button><button id="btnRouteClear" class="danger">Clear route</button></div>
-      <div id="routeList" class="live" style="font-size:0.8rem;"></div>
+    <div class="panel controls">
+      <div class="stopbar"><button id="btnStop" class="danger">Stop</button>
+        <span class="note">ends whatever is running (mapping or race) -- NOT an e-stop</span></div>
+
+      <section class="step">
+        <h2>1 &middot; Course</h2>
+        <label>Map name <input type="text" id="mapName" placeholder="map" style="width:10rem;">
+          <span class="note">the course, e.g. <b>speed</b> or <b>obstacle</b>. Type it first: the start pose,
+          the route and the final map are all saved under it.</span></label>
+      </section>
+
+      <section class="step">
+        <h2>2 &middot; Map the course</h2>
+        <div class="note">Robot on the marked start spot, lined up with the start direction.</div>
+        <div><button id="btnMappingNew">Start New Mapping Run</button>
+          <span class="note">then drive with the Teleop panel -- Q/E arcs, not A/D pivots</span></div>
+        <div><button id="btnStartPose">Set race start pose here</button>
+          <span class="note">press on the start mark:</span> <span id="startPose" class="live">none</span></div>
+
+        <h3>Route</h3>
+        <div class="note">At each corner, in driving order (and either side of potholes):</div>
+        <div><button id="btnRouteAdd">Add checkpoint here</button><button id="btnRouteUndo">Undo last</button><button id="btnRouteClear" class="danger">Clear route</button></div>
+        <div class="note"><span id="routeFile">map.route.yaml</span>: <b id="routeCount">0</b> checkpoints</div>
+        <div id="routeList" class="live" style="font-size:0.8rem;"></div>
+
+        <h3>Save progress / redo a bad section</h3>
+        <label>Checkpoint name <input type="text" id="ckptName" list="ckptList" placeholder="checkpoint" style="width:10rem;">
+          <datalist id="ckptList"></datalist>
+          <span class="note">new one per good section: speed_1, speed_2, ... (tape a mark under the robot)</span></label>
+        <div><button id="btnSaveCheckpoint">Save Checkpoint</button></div>
+        <div><button id="btnMappingResume">Resume Mapping Run</button>
+          <span class="note">reloads the checkpoint named above -- robot back on its mark, facing the same way</span></div>
+        <div class="note">Resume starts the robot at <span id="poseSource"></span>; change only if it isn't on the mark:</div>
+        <div class="posefields">
+          <label>x <input type="number" id="poseX" value="0.0" step="0.1" style="width:5rem;"></label>
+          <label>y <input type="number" id="poseY" value="0.0" step="0.1" style="width:5rem;"></label>
+          <label>yaw (rad) <input type="number" id="poseYaw" value="0.0" step="0.1" style="width:5rem;"></label>
+        </div>
+
+        <h3>Finish</h3>
+        <div><button id="btnSaveFinalMap">Save Final Map</button>
+          <span class="note">whole course mapped -- saved under the Map name, ready for step 3</span></div>
+
+        <details class="slam">
+          <summary>SLAM settings (slam_toolbox -- applied at the next mapping start)</summary>
+          <div>Changed values are highlighted; the default is shown on the right.</div>
+          <table><tbody id="slamKey"></tbody></table>
+          <details><summary>all other parameters</summary><table><tbody id="slamRest"></tbody></table></details>
+          <button id="btnSlamSave">Save SLAM settings</button><button id="btnSlamReset">Reset to defaults</button>
+        </details>
+        <details class="slam">
+          <summary>Autonomous mapping (the robot explores by itself)</summary>
+          <label>Nav2 <select id="nav2Mapping"><option value="">(default)</option></select></label>
+          <div><button id="btnMappingAuto">Start Autonomous Mapping Run</button>
+            <span class="note">wheels down, e-stop in hand</span></div>
+        </details>
+      </section>
+
+      <section class="step">
+        <h2>3 &middot; Race</h2>
+        <div class="note">Robot on the start mark. Before the start signal, run <code>scripts/check_localization.py</code>.</div>
+        <label>Speed cap <input type="number" id="capSpeed" min="0" step="0.1" placeholder="m/s" style="width:5rem;">
+          <input type="number" id="capTurn" min="0" step="0.1" placeholder="rad/s" style="width:5rem;">
+          <span class="note">blank = full speed; e.g. 0.4 / 1.0 for first laps</span></label>
+        <div class="choice">
+          <div><b>Plan A</b> -- saved map
+            <label>map <select id="raceMap"><option value="">(loading...)</option></select>
+              Nav2 <select id="nav2Bringup"><option value="">(default)</option></select></label>
+            <button id="btnStart">Start race (bringup)</button>
+            <div class="note">uses that map's own start pose and route</div></div>
+          <div><b>Plan B</b> -- no saved map
+            <div><button id="btnRaceLive">Race on live map</button></div>
+            <div class="note">maps live as it drives, following the route saved under the Map name (step 1)</div></div>
+        </div>
+      </section>
     </div>
 
-    <div class="panel">
-      <div>Teleop -- W/S forward/back, A/D rotate in place, Q/E veer left/right
-        (forward along a gentle 1 m-radius arc -- smoother than pivoting while mapping)</div>
+    <div class="panel teleop">
+      <div><b>Teleop</b></div>
+      <div class="note">W/S forward / back<br>Q/E veer left / right (gentle 1 m arc -- use these while mapping)<br>A/D rotate in place</div>
       <div class="dpad">
         <button id="btnArcLeft" title="Q: veer left">&#8598;</button><button id="btnFwd">&#9650;</button><button id="btnArcRight" title="E: veer right">&#8599;</button>
         <button id="btnLeft">&#9664;</button><button id="btnBack">&#9660;</button><button id="btnRight">&#9654;</button>
@@ -294,7 +341,7 @@ function showRoute(d) {
   document.getElementById('routeCount').textContent = pts.length;
   const sp = d.start_pose;
   document.getElementById('startPose').textContent =
-    sp ? `x ${(+sp.x).toFixed(2)}  y ${(+sp.y).toFixed(2)}  yaw ${(+sp.yaw).toFixed(2)}` : 'none (bringup uses nav2_params)';
+    sp ? `x ${(+sp.x).toFixed(2)}  y ${(+sp.y).toFixed(2)}  yaw ${(+sp.yaw).toFixed(2)}` : 'not set';
   document.getElementById('routeList').textContent =
     pts.map((p, i) => `${i + 1}: (${p[0].toFixed(2)}, ${p[1].toFixed(2)})`).join('   ');
 }
@@ -335,11 +382,11 @@ function loadCheckpointPose() {
   const name = document.getElementById('ckptName').value.trim();
   fetch('/api/checkpoint_pose?name=' + encodeURIComponent(name)).then(r => r.json()).then(d => {
     const src = document.getElementById('poseSource');
-    if (!d.pose) { src.textContent = '(no pose recorded for this checkpoint -- enter it by hand)'; return; }
+    if (!d.pose) { src.textContent = 'x/y/yaw below (no pose was saved with "' + (name || 'checkpoint') + '" -- enter it by hand)'; return; }
     document.getElementById('poseX').value = d.pose.x;
     document.getElementById('poseY').value = d.pose.y;
     document.getElementById('poseYaw').value = d.pose.yaw;
-    src.textContent = '(from checkpoint "' + (name || 'checkpoint') + '")';
+    src.textContent = 'the pose saved with "' + (name || 'checkpoint') + '"';
   });
 }
 loadCheckpointPose();

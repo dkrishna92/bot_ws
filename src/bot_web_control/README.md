@@ -43,6 +43,11 @@ across many runs.
 
 ## Controls
 
+The control panel is laid out in field order: **Stop** at the top, then
+**1 · Course** (Map name), **2 · Map the course** (start pose, route,
+checkpoints, final map; SLAM settings and autonomous mapping folded away)
+and **3 · Race** (speed cap, Plan A = saved map, Plan B = live map).
+
 | Control | What it does |
 | --- | --- |
 | **Start (bringup)** | Runs `ros2 launch bot_bringup bringup.launch.py` (the race launch) with this dashboard's `use_sim` and `world`, racing on the map picked in **on map**. |
