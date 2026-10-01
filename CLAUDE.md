@@ -46,6 +46,17 @@ Hard constraints from the rules doc:
   `sllidar_ros2` built from source into `src/` (gitignored, fetched at a
   pinned commit by `scripts/setup_pi.sh`) — the apt `rplidar_ros` 2.1.0
   (SDK 1.12) segfaults on scan start with this unit in every scan mode.
+  **Its scan's +x points to the robot's BACK: `lidar_joint` has yaw pi
+  (fixed 2026-10-01).** With yaw 0, every map before then was built with
+  forward motion read as backward by the scan matcher: SLAM's heading
+  drifted hundreds of degrees from the (correct) IMU/EKF heading --
+  the rotated/duplicated lanes -- and Nav2 saw obstacles ahead as behind.
+  Found by ICP on straight drives in the 2026-09-30 bags (lidar moved
+  at -176 deg in its own frame, 230/239 segments); a replay of the
+  speed-course mapping run with yaw pi: SLAM-vs-EKF heading -2 deg at the
+  end (was +561) and a clean two-lane course with a hairpin at each end.
+  Turn-only checks can't catch this (180 deg doesn't flip rotation).
+  **Maps, routes and start poses saved before 2026-10-01 are invalid.**
 - Camera: OAK-D S2 (Luxonis / DepthAI) — inference and stereo depth run
   on-device; host only receives detections + depth, never raw frames.
   Mounted below the lidar: housing bottom measured 9 cm above ground
