@@ -104,3 +104,51 @@ def test_fractional_tick_line_is_ignored(node):
     node._last_sample_time -= 0.1
     node._on_line("E,979.62,979.62,100000")
     assert published == []
+
+
+class _FakeSerial:
+    """Bytes waiting on the Teensy port, read the way pyserial does."""
+
+    def __init__(self):
+        self.buf = b""
+
+    @property
+    def in_waiting(self):
+        return len(self.buf)
+
+    def read(self, n):
+        out, self.buf = self.buf[:n], self.buf[n:]
+        return out
+
+    def close(self):
+        pass
+
+
+def test_poll_drains_a_backlog_and_uses_only_the_newest_encoder_line(node):
+    """2026-10-01: one readline per tick fell 2.4 s behind under load. A
+    backlog must be consumed in one poll, from the newest E line only."""
+    published = _last_published(node)
+    ranges = []
+    node._range_publishers["left"].publish = lambda msg: ranges.append(msg)
+    node._teensy_serial = port = _FakeSerial()
+    port.buf = b"E,0,0,0\n"
+    node._poll_serial()
+    node._last_sample_time -= 0.1
+    ticks = round(node._ticks_per_rev)
+    port.buf = b"".join(f"E,{i * 10},{i * 10},{i}\nU,1000,1000,{i}\n".encode() for i in range(1, 60))
+    port.buf += f"E,{ticks},{ticks},100000\nE,{ticks + 5},{ticks + 5},100".encode()  # last line partial
+    node._poll_serial()
+
+    assert port.in_waiting == 0
+    assert len(published) == 1  # one odometry update for the whole backlog
+    assert published[0].pose.pose.position.x == pytest.approx(
+        2.0 * math.pi * node._wheel_radius * ticks / node._ticks_per_rev, rel=1e-6)
+    assert len(ranges) == 59  # ultrasonic lines all still published
+    assert node._rx == f"E,{ticks + 5},{ticks + 5},100".encode()  # kept for the next poll
+
+
+def test_poll_with_nothing_waiting_does_nothing(node):
+    published = _last_published(node)
+    node._teensy_serial = _FakeSerial()
+    node._poll_serial()
+    assert published == []

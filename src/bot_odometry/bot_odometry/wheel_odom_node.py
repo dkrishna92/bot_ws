@@ -98,6 +98,7 @@ class WheelOdomNode(Node):
         }
 
         self._teensy_serial = None
+        self._rx = b""  # serial bytes after the last complete line
         if serial is not None:
             try:
                 self._teensy_serial = serial.Serial(
@@ -120,16 +121,39 @@ class WheelOdomNode(Node):
         self.create_timer(1.0 / 100.0, self._poll_serial)
 
     def _poll_serial(self) -> None:
+        # Drains everything waiting. Reading one line per tick fell behind
+        # the Teensy's ~71 lines/s (E 50 Hz + U 20 Hz + S 1 Hz) whenever the
+        # executor ran late under race-mode CPU load, and the backlog never
+        # cleared: /odom ran 2.4 s behind the IMU on 2026-10-01, which kept
+        # motor_node's kick-start re-kicking (it read "wheels not turning")
+        # and broke the speed caps.
         if self._teensy_serial is None:
             return
         try:
-            line = self._teensy_serial.readline().decode(errors="ignore").strip()
-        except serial.SerialException:
+            waiting = self._teensy_serial.in_waiting
+            if not waiting:
+                return
+            self._rx += self._teensy_serial.read(waiting)
+        except (serial.SerialException, OSError):
             self.get_logger().error("lost Teensy encoder serial connection")
             return
-        if not line:
-            return
-        self._on_line(line)
+        *lines, self._rx = self._rx.split(b"\n")
+        if len(self._rx) > 4096:  # no newline in a long time: garbage
+            self._rx = b""
+        self._on_lines([raw.decode(errors="ignore").strip() for raw in lines])
+
+    def _on_lines(self, lines: list[str]) -> None:
+        """One poll's worth of lines. Encoder counts are cumulative, so only
+        the newest E line matters -- integrating a burst of older ones with
+        ~0 dt between them made velocity spikes (24 rad/s)."""
+        last_e = None
+        for line in lines:
+            if line.startswith("E,"):
+                last_e = line
+            elif line:
+                self._on_line(line)
+        if last_e is not None:
+            self._on_line(last_e)
 
     def _on_line(self, line: str) -> None:
         parts = line.split(",")
