@@ -7,7 +7,8 @@ questions.
 
 ## Competition
 
-Culture Club Robotics Competition (CAT Robotics), October 1-2, 2026, two
+Culture Club Robotics Competition (CAT Robotics), originally October 1-2,
+2026 -- **postponed by rain on 2026-10-01; now starts 2026-10-02**. Two
 courses: "speed" (3 laps) and "obstacle" (2 laps + obstacle handling).
 Safety review due September 25, 2026. Path-following demo milestone is
 already complete — current effort targets the full October competition.
