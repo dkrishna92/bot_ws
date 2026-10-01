@@ -89,7 +89,9 @@ class MotorNode(Node):
         # behaviour); setting the running floors equal to the breakaway
         # ones also restores it. Defaults are estimates -- check with
         # teleop / drive_straight.py on the course surface.
-        self.declare_parameter("min_running_duty_cycle", 0.12)
+        # Measured 2026-10-01 with running_floor.py: kept rolling down to 8%
+        # duty (0.19 m/s), stalled at 6% -> 0.11 (~0.4 m/s slowest straight).
+        self.declare_parameter("min_running_duty_cycle", 0.11)
         self.declare_parameter("min_running_turn_duty_cycle", 0.50)
         self.declare_parameter("kick_duration_s", 0.15)
         self.declare_parameter("odom_topic", "odom")  # wheel_odom_node's raw wheel odometry

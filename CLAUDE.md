@@ -405,8 +405,8 @@ Laptop-first, Pi 5 for final integration:
   **Kick-start added 2026-10-01 (sim/unit-tested only):** those floors now
   apply only to break away (`kick_duration_s` 0.15, extended until wheel
   odometry shows the wheels turning, re-kicked on a stall or a
-  drive<->pivot switch); then `min_running_duty_cycle` (0.12) /
-  `min_running_turn_duty_cycle` (0.50) -- estimates, measure with
+  drive<->pivot switch); then `min_running_duty_cycle` (0.11) /
+  `min_running_turn_duty_cycle` (0.50; straight measured 8% on 2026-10-01 -> 0.11, pivot still an estimate) -- measure with
   `scripts/running_floor.py [--pivot]`. Without fresh `/odom` it keeps the
   breakaway floors (old behaviour).
   Straight-line calibration, same day (drive_straight.py + tape): breakaway
