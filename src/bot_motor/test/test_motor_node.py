@@ -258,10 +258,11 @@ def test_pivot_kicks_with_turn_floor_then_runs_lower(node, monkeypatch):
 
 
 def test_switching_drive_to_pivot_kicks(node, monkeypatch):
+    from bot_motor.motor_node import REKICK_GAP_S
     clock, calls = _kick_setup(node, monkeypatch, v=0.3)
     _odom(node, clock, v=0.4)
     _step(node, clock, calls, 0.0)
-    _step(node, clock, calls, 0.2)
+    _step(node, clock, calls, node._kick_s + REKICK_GAP_S + 0.05)
     msg = Twist()
     msg.angular.z = 0.5
     node._on_cmd_vel(msg)
@@ -279,3 +280,40 @@ def test_without_wheel_odometry_the_breakaway_floor_stays(node, monkeypatch):
     clock.t += 0.5                                             # odometry goes stale
     out = _step(node, clock, calls, 0.0)
     assert out[0][0] == pytest.approx(node._min_duty)
+
+
+
+def _floor_used(out):
+    """The duty floor one tick used: pivots pass it as min_duty; drives
+    pass 0 and scale the faster side up to it."""
+    duty, min_duty = out[0]
+    return min_duty if min_duty else max(abs(d) for d, _ in out)
+
+
+def _kicking(node, out):
+    return any(_floor_used(out) == pytest.approx(f) for f in (node._min_duty, node._min_turn_duty))
+
+
+def test_odometry_that_never_shows_turning_cannot_hold_the_kick_on(node, monkeypatch):
+    """2026-10-01: /odom ran 2.4 s late, so it said "not turning" while the
+    robot drove -- the kick re-fired every 0.15 s and broke the speed cap."""
+    from bot_motor.motor_node import MAX_KICK_S, REKICK_GAP_S
+    clock, calls = _kick_setup(node, monkeypatch, v=0.3)
+    kicked = 0
+    for _ in range(150):                                       # 3 s, odometry fresh but "stopped"
+        _odom(node, clock, v=0.0)
+        kicked += _kicking(node, _step(node, clock, calls, 0.02))
+    assert kicked / 150 <= MAX_KICK_S / (MAX_KICK_S + REKICK_GAP_S) + 0.05
+    assert kicked > 0                                          # still kicks: real stalls get help
+
+
+def test_drive_pivot_flapping_does_not_kick_every_switch(node, monkeypatch):
+    clock, calls = _kick_setup(node, monkeypatch)
+    kicked = 0
+    for i in range(100):                                       # 2 s, switching every tick
+        msg = Twist()
+        msg.linear.x, msg.angular.z = (0.3, 0.0) if i % 2 else (0.0, 0.5)
+        node._on_cmd_vel(msg)
+        _odom(node, clock, v=0.4, w=0.6)                       # wheels moving all along
+        kicked += _kicking(node, _step(node, clock, calls, 0.02))
+    assert kicked <= 30                                        # was every tick (100)

@@ -46,6 +46,14 @@ LGPIO_MAX_PWM_HZ = 10000
 ODOM_STALE_S = 0.3
 WHEELS_TURNING_MPS = 0.05
 WHEELS_TURNING_RADPS = 0.15
+# Bounds on the kick, so late or wrong odometry can't hold the breakaway
+# floor on (2026-10-01: /odom 2.4 s behind made it re-kick continuously --
+# ~1.1 m/s under a 0.5 m/s cap): one kick is extended while the wheels
+# aren't turning yet only up to MAX_KICK_S, and a stall or drive<->pivot
+# switch kicks again only after REKICK_GAP_S at the running floor. A start
+# from a stop always kicks.
+MAX_KICK_S = 0.5
+REKICK_GAP_S = 0.5
 
 
 class MotorNode(Node):
@@ -168,6 +176,7 @@ class MotorNode(Node):
         # Kick-start state: last drive mode ("stop" / "drive" / "pivot"), when
         # the current kick ends, and the latest wheel-odometry twist.
         self._mode = "stop"
+        self._kick_start = 0.0
         self._kick_until = 0.0
         self._odom_time: float | None = None
         self._odom_v = 0.0
@@ -219,19 +228,29 @@ class MotorNode(Node):
     def _floor(self, mode: str, now: float) -> float:
         """Duty floor for this tick: the breakaway floor while kicking, the
         running floor once the wheels turn. Kicks on every start or mode
-        change, and again whenever the wheels stop while still commanded."""
+        change, and again whenever the wheels stop while still commanded
+        (bounded: see MAX_KICK_S / REKICK_GAP_S)."""
         if mode == "pivot":
             kick, running = self._min_turn_duty, self._min_run_turn_duty
         else:
             kick, running = self._min_duty, self._min_run_duty
         if mode != self._mode:
-            self._kick_until = now + self._kick_s
+            self._kick(now, force=self._mode == "stop")
         turning = self._wheels_turning(now)
         if turning is None:
             return kick  # no wheel feedback: always the breakaway floor (old behaviour)
         if not turning and now >= self._kick_until:
-            self._kick_until = now + self._kick_s  # stopped/stalled while commanded: kick again
+            if now - self._kick_start < MAX_KICK_S:
+                # not turning yet: keep kicking, up to MAX_KICK_S in all
+                self._kick_until = min(now + self._kick_s, self._kick_start + MAX_KICK_S)
+            else:
+                self._kick(now)  # stopped/stalled while commanded: kick again
         return kick if now < self._kick_until else running
+
+    def _kick(self, now: float, force: bool = False) -> None:
+        if force or now >= self._kick_until + REKICK_GAP_S:
+            self._kick_start = now
+            self._kick_until = now + self._kick_s
 
     def _on_fault(self, msg: Bool) -> None:
         if msg.data and not self._fault:
