@@ -76,8 +76,12 @@ for t in configure activate; do
         sleep 1
     done
 done
-[[ "$(ros2 lifecycle get --no-daemon --spin-time 3 /slam_toolbox 2>/dev/null)" == active* ]] \
-    || { echo "slam_toolbox didn't start -- see $out.slam.log"; exit 1; }
+active=0
+for _ in $(seq 10); do  # activation can lag the 'successful' reply on a busy machine
+    [[ "$(ros2 lifecycle get --no-daemon --spin-time 3 /slam_toolbox 2>/dev/null)" == active* ]] && { active=1; break; }
+    sleep 2
+done
+((active)) || { echo "slam_toolbox didn't start -- see $out.slam.log"; exit 1; }
 
 # slam_toolbox only publishes /map while something subscribes, and its
 # publish loop runs on the bag's clock, which stops when playback ends -- so

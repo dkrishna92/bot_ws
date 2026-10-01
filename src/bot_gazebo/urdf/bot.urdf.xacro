@@ -236,9 +236,16 @@
        plane's height above ground: ~0.155 m, above the OAK's top (0.118 m)
        so the beam clears the camera. Measured position: see the sensor
        placement properties at the top of this file. The live scan confirms
-       no self-returns (nothing closer than 0.32 m, 2026-09-25). -->
+       no self-returns (nothing closer than 0.32 m, 2026-09-25).
+       Yaw pi (2026-10-01): the scan's +x points to the robot's BACK. In
+       yesterday's bags, ICP between consecutive scans on straight drives
+       put the lidar's travel at -176 deg in its own frame (230 of 239
+       segments) while the wheels said forward; with yaw 0, SLAM fought the
+       IMU heading by hundreds of degrees (rotated, duplicated lanes) and
+       Nav2 saw obstacles ahead as behind. Turns looked right either way
+       (a 180 deg mount doesn't flip rotation), which hid it. -->
   <joint name="lidar_joint" type="fixed">
-    <origin xyz="${oak_front_x - 0.035} ${oak_width/2 - 0.055} ${lidar_top_height - lidar_plane_below_top}" rpy="0 0 0"/>
+    <origin xyz="${oak_front_x - 0.035} ${oak_width/2 - 0.055} ${lidar_top_height - lidar_plane_below_top}" rpy="0 0 ${pi}"/>
     <parent link="base_link"/>
     <child link="lidar_link"/>
   </joint>
