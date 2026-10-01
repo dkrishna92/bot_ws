@@ -42,6 +42,7 @@ class _FakeBus:
 
 
 def _capture_publisher(node):
+    node._fusion_ready = True  # past the startup gate (tested separately below)
     captured = []
     node._publisher.publish = lambda msg: captured.append(msg)
     return captured
@@ -104,3 +105,103 @@ def test_failed_read_skips_the_sample_instead_of_crashing(node):
 
     node._tick()
     assert len(captured) == 1 and node._read_failures == 0
+
+
+# ---- startup gate and glitch filter ----
+
+class _Clock:
+    def __init__(self):
+        self.t = 100.0
+
+    def monotonic(self):
+        return self.t
+
+    def sleep(self, _):
+        pass
+
+
+def _quat_yaw(yaw_rad):
+    import math
+    return {0x20: int(math.cos(yaw_rad / 2) / _QUA_LSB_PER_UNIT), 0x26: int(math.sin(yaw_rad / 2) / _QUA_LSB_PER_UNIT)}
+
+
+def test_placeholder_quaternion_is_held_back_until_fusion_runs(node, monkeypatch):
+    import math
+    clock = _Clock()
+    monkeypatch.setattr("bot_imu.bno055_node.time", clock)
+    captured = []
+    node._publisher.publish = lambda msg: captured.append(msg)
+    node._init_time, node._fusion_ready = clock.t, False
+    node._bus = _FakeBus({0x20: int(1.0 / _QUA_LSB_PER_UNIT)})       # identity placeholder
+    for _ in range(10):
+        clock.t += 0.02
+        node._tick()
+    assert captured == []                                             # held back
+    node._bus = _FakeBus(_quat_yaw(math.radians(131.9)))              # fusion's real heading
+    clock.t += 0.02
+    node._tick()
+    assert len(captured) == 1                                         # the EKF's zero is the real heading
+
+
+def test_all_zero_quaternion_is_a_placeholder_too(node, monkeypatch):
+    clock = _Clock()
+    monkeypatch.setattr("bot_imu.bno055_node.time", clock)
+    captured = []
+    node._publisher.publish = lambda msg: captured.append(msg)
+    node._init_time, node._fusion_ready = clock.t, False
+    node._bus = _FakeBus({})
+    clock.t += 0.02
+    node._tick()
+    assert captured == []
+
+
+def test_gate_gives_up_after_its_timeout(node, monkeypatch):
+    clock = _Clock()
+    monkeypatch.setattr("bot_imu.bno055_node.time", clock)
+    captured = []
+    node._publisher.publish = lambda msg: captured.append(msg)
+    node._init_time, node._fusion_ready = clock.t, False
+    node._bus = _FakeBus({0x20: int(1.0 / _QUA_LSB_PER_UNIT)})       # genuinely at heading 0
+    clock.t += 2.5
+    node._tick()
+    assert len(captured) == 1
+
+
+def test_one_sample_heading_glitch_is_skipped(node, monkeypatch):
+    import math
+    clock = _Clock()
+    monkeypatch.setattr("bot_imu.bno055_node.time", clock)
+    captured = _capture_publisher(node)
+    for yaw in (10, 10, 115, 10, 10):                                 # +105 deg for one read, gyro 0
+        node._bus = _FakeBus(_quat_yaw(math.radians(yaw)))
+        clock.t += 0.02
+        node._tick()
+    assert len(captured) == 4                                         # the 115 sample was dropped
+
+
+def test_persistent_heading_jump_is_accepted(node, monkeypatch):
+    import math
+    clock = _Clock()
+    monkeypatch.setattr("bot_imu.bno055_node.time", clock)
+    captured = _capture_publisher(node)
+    for yaw in [0] + [90] * 8:                                        # e.g. the chip really reset
+        node._bus = _FakeBus(_quat_yaw(math.radians(yaw)))
+        clock.t += 0.02
+        node._tick()
+    assert len(captured) == 1 + 3                                     # 5 skipped, then accepted
+
+
+def test_real_turn_backed_by_the_gyro_passes(node, monkeypatch):
+    import math
+    clock = _Clock()
+    monkeypatch.setattr("bot_imu.bno055_node.time", clock)
+    captured = _capture_publisher(node)
+    yaw = 0.0
+    for _ in range(10):                                               # 2 rad/s turn
+        regs = _quat_yaw(yaw)
+        regs[0x18] = int(2.0 * 900)                                   # gyro z, 900 LSB per rad/s
+        node._bus = _FakeBus(regs)
+        clock.t += 0.02
+        node._tick()
+        yaw += 2.0 * 0.02
+    assert len(captured) == 10

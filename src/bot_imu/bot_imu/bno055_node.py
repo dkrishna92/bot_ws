@@ -22,6 +22,7 @@ machines" pattern as bot_motor's RPi.GPIO usage.
 """
 from __future__ import annotations
 
+import math
 import time
 
 import rclpy
@@ -54,6 +55,19 @@ _ACC_LSB_PER_MS2 = 100.0
 _GYR_LSB_PER_RPS = 900.0
 _QUA_LSB_PER_UNIT = 1.0 / (1 << 14)
 _REINIT_AFTER_FAILURES = 100  # consecutive failed reads (~2 s at 50 Hz)
+# Right after a mode switch the chip reports a placeholder quaternion
+# (identity / all zeros) for ~1 s until fusion runs, then jumps to its real
+# heading. The EKF (imu0_relative) zeroes on the FIRST orientation it gets,
+# so publishing the placeholder made every launch start with a phantom turn
+# (+132 deg on 2026-09-30, with the robot standing still). Hold samples back
+# until the quaternion is real, for at most this long.
+_FUSION_STARTUP_GATE_S = 2.0
+# A single bad read can carry a wild orientation (+105 deg and back in one
+# sample, 2026-09-30). Skip samples whose heading moved more than this
+# beyond what the gyro measured; accept a jump that persists for more than
+# _MAX_SKIPPED_JUMPS samples (e.g. the chip really reset).
+_MAX_HEADING_JUMP_RAD = 0.26  # ~15 deg
+_MAX_SKIPPED_JUMPS = 5
 
 # Approximated from the same BNO055 datasheet noise-density figures as
 # bot_gazebo/urdf/bot.urdf.xacro's simulated IMU noise -- see that file's
@@ -96,6 +110,12 @@ class Bno055Node(Node):
 
         self._publisher = self.create_publisher(Imu, "imu", 10)
         self._read_failures = 0
+        # Startup gate / glitch filter state (see _FUSION_STARTUP_GATE_S)
+        self._init_time = time.monotonic()
+        self._fusion_ready = False
+        self._last_yaw: float | None = None
+        self._last_yaw_time = 0.0
+        self._skipped_jumps = 0
 
         if SMBus is not None:
             self._bus = SMBus(self.get_parameter("i2c_bus").value)
@@ -121,6 +141,10 @@ class Bno055Node(Node):
         self._bus.write_byte_data(self._address, _UNIT_SEL_ADDR, _UNIT_SEL_GYRO_RPS)
         self._bus.write_byte_data(self._address, _OPR_MODE_ADDR, self._fusion_mode)
         time.sleep(0.02)
+        # (Re)arm the startup gate: fusion restarts with a placeholder.
+        self._init_time = time.monotonic()
+        self._fusion_ready = False
+        self._last_yaw = None
 
     @staticmethod
     def _i16_at(block: list[int], offset: int) -> int:
@@ -170,6 +194,9 @@ class Bno055Node(Node):
         msg.orientation.y = self._i16_at(block, qua_off + 4) * _QUA_LSB_PER_UNIT
         msg.orientation.z = self._i16_at(block, qua_off + 6) * _QUA_LSB_PER_UNIT
         msg.orientation_covariance = self._orientation_covariance
+        gyro_z = self._i16_at(block, gyr_off + 4) / _GYR_LSB_PER_RPS
+        if not self._orientation_usable(msg.orientation, gyro_z):
+            return
 
         msg.angular_velocity.x = self._i16_at(block, gyr_off) / _GYR_LSB_PER_RPS
         msg.angular_velocity.y = self._i16_at(block, gyr_off + 2) / _GYR_LSB_PER_RPS
@@ -182,6 +209,32 @@ class Bno055Node(Node):
         msg.linear_acceleration_covariance = self._linear_acceleration_covariance
 
         self._publisher.publish(msg)
+
+    def _orientation_usable(self, q, gyro_z: float) -> bool:
+        """False for samples to hold back: the placeholder quaternion before
+        fusion runs, and one-off heading jumps the gyro doesn't back up."""
+        now = time.monotonic()
+        if not self._fusion_ready:
+            norm = math.sqrt(q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z)
+            placeholder = (q.w, q.x, q.y, q.z) == (1.0, 0.0, 0.0, 0.0) or abs(norm - 1.0) > 0.1
+            if placeholder and now - self._init_time < _FUSION_STARTUP_GATE_S:
+                return False
+            self._fusion_ready = True
+            self.get_logger().info("BNO055 fusion running -- publishing /imu")
+        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        if self._last_yaw is not None:
+            expected = gyro_z * (now - self._last_yaw_time)
+            jump = math.atan2(math.sin(yaw - self._last_yaw - expected), math.cos(yaw - self._last_yaw - expected))
+            if abs(jump) > _MAX_HEADING_JUMP_RAD:
+                if self._skipped_jumps < _MAX_SKIPPED_JUMPS:
+                    self._skipped_jumps += 1
+                    self.get_logger().warn(f"IMU heading jumped {math.degrees(jump):+.0f} deg beyond the gyro "
+                                           "-- skipping the sample (bad read?)")
+                    return False
+                self.get_logger().warn(f"IMU heading jump of {math.degrees(jump):+.0f} deg persisted -- accepting it")
+        self._skipped_jumps = 0
+        self._last_yaw, self._last_yaw_time = yaw, now
+        return True
 
     def destroy_node(self) -> None:
         if self._bus is not None:
