@@ -86,7 +86,8 @@ def _resolve_map(context):
 def _capped_nav2_params(path, max_speed, max_turn, initial_pose=None):
     """Nav2 params with speeds capped for slow first laps: returns (path to
     use, what changed). Caps the controller (DWB max_vel_x/max_speed_xy/
-    max_vel_theta, MPPI vx_max/wz_max), the velocity smoother and the spin
+    max_vel_theta, MPPI vx_max/wz_max, RPP + rotation shim
+    desired_linear_vel/rotate_to_heading_angular_vel), the velocity smoother and the spin
     behaviour -- the smoother alone would clamp output while the controller
     still planned for full speed. max_speed/max_turn <= 0 leave that axis
     alone; nothing capped returns the original path."""
@@ -111,9 +112,9 @@ def _capped_nav2_params(path, max_speed, max_turn, initial_pose=None):
     ctrl = (params.get('controller_server') or {}).get('ros__parameters') or {}
     for plugin in ctrl.values():
         if isinstance(plugin, dict):
-            for key in ('max_vel_x', 'max_speed_xy', 'vx_max'):
+            for key in ('max_vel_x', 'max_speed_xy', 'vx_max', 'desired_linear_vel'):
                 cap(plugin, key, max_speed)
-            for key in ('max_vel_theta', 'max_speed_theta', 'wz_max'):
+            for key in ('max_vel_theta', 'max_speed_theta', 'wz_max', 'rotate_to_heading_angular_vel'):
                 cap(plugin, key, max_turn)
     smoother = (params.get('velocity_smoother') or {}).get('ros__parameters') or {}
     for key in ('max_velocity', 'min_velocity'):

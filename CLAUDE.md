@@ -640,6 +640,17 @@ describes:
   on the eventual Raspberry Pi 5 (confirmed single-threaded, no
   OpenMP/TBB) is unbenchmarked on real hardware.
 
+- **Rotation Shim + Regulated Pure Pursuit** (`nav2_params_rpp.yaml` /
+  `nav2_mapping_params_rpp.yaml`, added 2026-10-01) — a geometric path
+  follower, far lighter than DWB/MPPI (no trajectory sampling); the shim
+  turns in place first when the path is >45 deg off. Doesn't swerve
+  around obstacles itself (slows/stops; the planner re-plans), so it
+  suits the speed course's recorded route more than the obstacle course.
+  Sim check (laptop, autonomous mapping, speed course): 5/5 frontier goals
+  succeeded, ~17 m in 22 s, one startup control-rate miss. Speed caps
+  handle its `desired_linear_vel`/`rotate_to_heading_angular_vel`.
+  Unmeasured on the Pi.
+
 Config file naming: `nav2_params_<variant>.yaml` (race/bringup) and
 `nav2_mapping_params_<variant>.yaml` (mapping), each a full copy of its
 baseline with only one plugin block changed (`planner_server.GridBased` for
