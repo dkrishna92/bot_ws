@@ -117,6 +117,35 @@ For each course, in the dashboard:
 5. Press **Save Final Map** under the same name (`speed`). The map,
    `speed.route.yaml` and `speed.start.yaml` now belong together.
 
+#### Autonomous mapping with MPPI, from a terminal (with a rosbag)
+Nav2 + frontier exploration drive the robot; leaving out `teleop:=true` is
+what makes it autonomous. On the Pi (`ssh robot-pi`), two terminals:
+
+Terminal 1 -- stop robotics-challenge-2026's RC mode if it's running (it
+holds the lidar and motor pins), clean up, launch:
+```bash
+pkill -INT -f "src.main --mode rc"; sleep 2
+cd ~/bot_ws && source install/setup.bash
+scripts/clean_robot.sh
+ros2 launch bot_bringup mapping.launch.py use_sim:=false nav2_params_file:=nav2_mapping_params_mppi.yaml
+```
+
+Terminal 2 -- record, once terminal 1 is up. `record_run.sh` records the
+camera by default (unlike the dashboard); `--no-camera` keeps the bag small:
+```bash
+cd ~/bot_ws && scripts/record_run.sh speed_auto_mppi --no-camera
+```
+
+Stop: Ctrl-C terminal 2 first (closes the bag), then terminal 1. The bag is
+`~/bot_ws/runs/speed_auto_mppi_<date-time>/`. Dashboard equivalent: pick
+`nav2_mapping_params_mppi.yaml` in the Nav2 mapping list, keep **Record
+rosbag** ticked, **Start Autonomous Mapping Run**.
+
+Watch for: it drives on its own (~1.1 m/s is the slowest straight speed, so
+give it room, e-stop in hand); MPPI is unbenchmarked on the Pi -- if
+terminal 1 shows `Control loop missed its desired rate`, stop and use the
+default `nav2_mapping_params.yaml` (DWB).
+
 ### Block 3: first autonomous laps (about 2 h)
 1. Robot on the start spot. In **on map** pick `speed`, set the Nav2 speed cap
    to **0.4 m/s and 1.0 rad/s**, then press **Start (bringup)**.
