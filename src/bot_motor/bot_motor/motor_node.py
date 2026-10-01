@@ -32,6 +32,7 @@ import time
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
+from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool
 
 try:
@@ -40,6 +41,11 @@ except ImportError:
     lgpio = None  # allows this module to be imported on non-Pi dev machines
 
 LGPIO_MAX_PWM_HZ = 10000
+# Kick-start: wheel odometry older than this counts as missing, and these
+# speeds count as "wheels turning" (well above encoder noise at rest).
+ODOM_STALE_S = 0.3
+WHEELS_TURNING_MPS = 0.05
+WHEELS_TURNING_RADPS = 0.15
 
 
 class MotorNode(Node):
@@ -71,6 +77,22 @@ class MotorNode(Node):
         # spun ~110 deg/s -- a floor this high makes small pivot
         # corrections overshoot (use Q/E arcs while mapping).
         self.declare_parameter("min_turn_duty_cycle", 0.66)
+        # Kick-start (2026-10-01): the two floors above are BREAKAWAY floors
+        # -- what it takes to get the wheels turning from rest. Once they
+        # turn, much less keeps them turning (35% duty cruised 1.3 m/s), so
+        # after kick_duration_s -- and only once wheel odometry shows the
+        # wheels actually turning -- the floor drops to these running
+        # floors. That allows straight speeds well below the ~1.1 m/s the
+        # breakaway floor forced, and pivots slower than its ~110 deg/s.
+        # If the wheels stop while still commanded (stall), it kicks again.
+        # Without fresh wheel odometry the breakaway floors stay on (the old
+        # behaviour); setting the running floors equal to the breakaway
+        # ones also restores it. Defaults are estimates -- check with
+        # teleop / drive_straight.py on the course surface.
+        self.declare_parameter("min_running_duty_cycle", 0.12)
+        self.declare_parameter("min_running_turn_duty_cycle", 0.50)
+        self.declare_parameter("kick_duration_s", 0.15)
+        self.declare_parameter("odom_topic", "odom")  # wheel_odom_node's raw wheel odometry
         self.declare_parameter("cmd_vel_timeout_s", 0.3)
         self.declare_parameter("track_width_m", 0.33)  # measured 2026-09-30 (was 0.32)
         # Wheel speed at 100% duty (open loop: duty = v / this). Measured
@@ -112,6 +134,9 @@ class MotorNode(Node):
         self._max_duty = self.get_parameter("max_duty_cycle").value
         self._min_duty = self.get_parameter("min_duty_cycle").value
         self._min_turn_duty = self.get_parameter("min_turn_duty_cycle").value
+        self._min_run_duty = self.get_parameter("min_running_duty_cycle").value
+        self._min_run_turn_duty = self.get_parameter("min_running_turn_duty_cycle").value
+        self._kick_s = self.get_parameter("kick_duration_s").value
         self._timeout_s = self.get_parameter("cmd_vel_timeout_s").value
         self._track_width = self.get_parameter("track_width_m").value
         self._max_v = self.get_parameter("max_linear_speed_mps").value
@@ -135,6 +160,13 @@ class MotorNode(Node):
         self._last_cmd_time = 0.0
         self._fault = False
         self._driver_fault = False
+        # Kick-start state: last drive mode ("stop" / "drive" / "pivot"), when
+        # the current kick ends, and the latest wheel-odometry twist.
+        self._mode = "stop"
+        self._kick_until = 0.0
+        self._odom_time: float | None = None
+        self._odom_v = 0.0
+        self._odom_w = 0.0
 
         self._h = None
         if self.get_parameter("dry_run").value:
@@ -160,11 +192,41 @@ class MotorNode(Node):
 
         self.create_subscription(Twist, "cmd_vel", self._on_cmd_vel, 10)
         self.create_subscription(Bool, "system_fault", self._on_fault, 10)
+        self.create_subscription(Odometry, self.get_parameter("odom_topic").value, self._on_odom, 10)
         self.create_timer(1.0 / 50.0, self._tick)
 
     def _on_cmd_vel(self, msg: Twist) -> None:
         self._last_cmd = msg
         self._last_cmd_time = time.monotonic()
+
+    def _on_odom(self, msg: Odometry) -> None:
+        self._odom_time = time.monotonic()
+        self._odom_v = msg.twist.twist.linear.x
+        self._odom_w = msg.twist.twist.angular.z
+
+    def _wheels_turning(self, now: float) -> bool | None:
+        """From wheel odometry: are the wheels turning? None if there's no
+        fresh odometry (then the kick-start can't tell, see _floor)."""
+        if self._odom_time is None or now - self._odom_time > ODOM_STALE_S:
+            return None
+        return abs(self._odom_v) > WHEELS_TURNING_MPS or abs(self._odom_w) > WHEELS_TURNING_RADPS
+
+    def _floor(self, mode: str, now: float) -> float:
+        """Duty floor for this tick: the breakaway floor while kicking, the
+        running floor once the wheels turn. Kicks on every start or mode
+        change, and again whenever the wheels stop while still commanded."""
+        if mode == "pivot":
+            kick, running = self._min_turn_duty, self._min_run_turn_duty
+        else:
+            kick, running = self._min_duty, self._min_run_duty
+        if mode != self._mode:
+            self._kick_until = now + self._kick_s
+        turning = self._wheels_turning(now)
+        if turning is None:
+            return kick  # no wheel feedback: always the breakaway floor (old behaviour)
+        if not turning and now >= self._kick_until:
+            self._kick_until = now + self._kick_s  # stopped/stalled while commanded: kick again
+        return kick if now < self._kick_until else running
 
     def _on_fault(self, msg: Bool) -> None:
         if msg.data and not self._fault:
@@ -218,9 +280,11 @@ class MotorNode(Node):
         return self._driver_fault
 
     def _tick(self) -> None:
-        stale = (time.monotonic() - self._last_cmd_time) > self._timeout_s
+        now = time.monotonic()
+        stale = (now - self._last_cmd_time) > self._timeout_s
         driver_fault = self._read_driver_fault()
         if self._fault or driver_fault or stale or self._last_cmd is None:
+            self._mode = "stop"
             self._stop_all()
             return
 
@@ -231,9 +295,17 @@ class MotorNode(Node):
 
         duty_l, duty_r = v_left / self._max_v, v_right / self._max_v
         if v_left * v_right < 0:
+            mode = "pivot"
+        elif duty_l == 0.0 and duty_r == 0.0:
+            mode = "stop"
+        else:
+            mode = "drive"
+        floor = self._floor(mode, now) if mode != "stop" else 0.0
+        self._mode = mode
+        if mode == "pivot":
             # Sides turning opposite ways = pivoting, which needs the higher floor
-            self._set_channel(self._chan_a, duty_l, self._min_turn_duty)
-            self._set_channel(self._chan_b, duty_r, self._min_turn_duty)
+            self._set_channel(self._chan_a, duty_l, floor)
+            self._set_channel(self._chan_b, duty_r, floor)
             return
         # Driving straight or along an arc: lift BOTH sides together so the
         # faster one reaches min_duty_cycle, keeping their ratio -- the ratio
@@ -242,8 +314,8 @@ class MotorNode(Node):
         # both 0.25), so the robot could only change direction by pivoting,
         # which jerks and smears the map (2026-10-01).
         big = max(abs(duty_l), abs(duty_r))
-        if 0.0 < big < self._min_duty:
-            scale = self._min_duty / big
+        if 0.0 < big < floor:
+            scale = floor / big
             duty_l, duty_r = duty_l * scale, duty_r * scale
         # No per-side floor on top: the outer side is already >= min_duty,
         # and the inner one must stay proportionally slower.

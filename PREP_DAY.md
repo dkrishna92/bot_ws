@@ -83,6 +83,19 @@ recorded start pose, and every race starts on exactly that spot.
 - **Driving straight:** run `scripts/drive_straight.py --distance 3`. Check the
   encoder diagnostics (peak tick rate, missed states) and whether any driver
   faults happen.
+- **Running floors (kick-start, added 2026-10-01):** `motor_node` now uses
+  the breakaway floors only to get moving, then drops to running floors so
+  it can drive slower than ~1.1 m/s and pivot gently. Measure them **on the
+  asphalt**, about 4 m clear ahead / room to spin:
+  ```bash
+  scripts/running_floor.py           # straight -> min_running_duty_cycle
+  scripts/running_floor.py --pivot   # pivot    -> min_running_turn_duty_cycle
+  ```
+  Set the values it recommends in `motor_node.py` (defaults 0.12 / 0.50 are
+  estimates). Then teleop slowly (0.3 m/s, Q/E arcs) and check it creeps
+  smoothly. If it stutters (kicks, runs, stalls, kicks...), raise the
+  running floor. Setting the running floors equal to `min_duty_cycle` /
+  `min_turn_duty_cycle` turns the kick-start off.
 
 ### Block 2: map both courses (about 2 h)
 For each course, in the dashboard:

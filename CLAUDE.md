@@ -401,8 +401,14 @@ Laptop-first, Pi 5 for final integration:
   (2026-09-29), then 61% on 2026-09-30 (`min_turn_duty_cycle` now 0.66;
   that run had no driver fault at 61% on both sides, 2 missed encoder
   states, and the wheels slipped ~30% vs the IMU). Once moving, 61% spun
-  ~110 deg/s, so this floor makes small pivot corrections overshoot; a
-  kick-start (high floor only for the first ~150 ms of a pivot) would fix it.
+  ~110 deg/s, so this floor makes small pivot corrections overshoot.
+  **Kick-start added 2026-10-01 (sim/unit-tested only):** those floors now
+  apply only to break away (`kick_duration_s` 0.15, extended until wheel
+  odometry shows the wheels turning, re-kicked on a stall or a
+  drive<->pivot switch); then `min_running_duty_cycle` (0.12) /
+  `min_running_turn_duty_cycle` (0.50) -- estimates, measure with
+  `scripts/running_floor.py [--pivot]`. Without fresh `/odom` it keeps the
+  breakaway floors (old behaviour).
   Straight-line calibration, same day (drive_straight.py + tape): breakaway
   28% (`min_duty_cycle` 0.25 -> 0.30); settled cruise 1.91 m/s at 50% on a
   5 m run -> motor_node's open-loop `max_linear_speed_mps` 2.0 -> 3.8 (2.0

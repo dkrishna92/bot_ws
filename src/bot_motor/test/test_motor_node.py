@@ -184,3 +184,98 @@ def test_small_pivot_duty_is_clamped_to_min_turn_duty_cycle(node, monkeypatch):
     node._set_channel(node._chan_a, -0.08, node._min_turn_duty)  # ~1 rad/s pivot
 
     assert fake.tx_pwm_calls == [pytest.approx(node._min_turn_duty * 100.0)]
+
+
+# ---- kick-start: breakaway floor to get moving, running floor once turning ----
+
+class _Clock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def monotonic(self):
+        return self.t
+
+
+def _odom(node, clock, v=0.0, w=0.0):
+    from nav_msgs.msg import Odometry
+    msg = Odometry()
+    msg.twist.twist.linear.x, msg.twist.twist.angular.z = v, w
+    node._on_odom(msg)
+
+
+def _kick_setup(node, monkeypatch, v=0.0, w=0.0):
+    clock = _Clock()
+    monkeypatch.setattr("bot_motor.motor_node.time", clock)
+    msg = Twist()
+    msg.linear.x, msg.angular.z = v, w
+    node._on_cmd_vel(msg)
+    return clock, _capture_both(node)
+
+
+def _step(node, clock, calls, dt):
+    clock.t += dt
+    node._last_cmd_time = clock.t  # keep the command fresh
+    calls.clear()
+    node._tick()
+    return list(calls)
+
+
+def test_slow_straight_kicks_then_drops_to_running_floor(node, monkeypatch):
+    clock, calls = _kick_setup(node, monkeypatch, v=0.3)  # 0.3 m/s -> ~0.08 duty
+    _odom(node, clock, v=0.0)
+    first = _step(node, clock, calls, 0.0)
+    assert first[0][0] == pytest.approx(node._min_duty)       # breakaway floor while starting
+    _odom(node, clock, v=0.4)                                  # wheels turning now
+    later = _step(node, clock, calls, node._kick_s + 0.01)
+    assert later[0][0] == pytest.approx(node._min_run_duty)   # running floor: slower than before
+
+
+def test_kick_holds_until_the_wheels_actually_turn(node, monkeypatch):
+    clock, calls = _kick_setup(node, monkeypatch, v=0.3)
+    for _ in range(5):                                         # 0.5 s, wheels still not turning
+        _odom(node, clock, v=0.0)
+        out = _step(node, clock, calls, 0.1)
+    assert out[0][0] == pytest.approx(node._min_duty)
+
+
+def test_stall_while_running_kicks_again(node, monkeypatch):
+    clock, calls = _kick_setup(node, monkeypatch, v=0.3)
+    _odom(node, clock, v=0.4)
+    _step(node, clock, calls, 0.0)
+    assert _step(node, clock, calls, 0.2)[0][0] == pytest.approx(node._min_run_duty)
+    _odom(node, clock, v=0.0)                                  # stalled (sand, a bump)
+    assert _step(node, clock, calls, 0.02)[0][0] == pytest.approx(node._min_duty)
+
+
+def test_pivot_kicks_with_turn_floor_then_runs_lower(node, monkeypatch):
+    clock, calls = _kick_setup(node, monkeypatch, w=0.5)
+    _odom(node, clock, w=0.0)
+    first = _step(node, clock, calls, 0.0)
+    assert [f for _, f in first] == pytest.approx([node._min_turn_duty] * 2)
+    _odom(node, clock, w=0.6)
+    later = _step(node, clock, calls, node._kick_s + 0.01)
+    assert [f for _, f in later] == pytest.approx([node._min_run_turn_duty] * 2)
+
+
+def test_switching_drive_to_pivot_kicks(node, monkeypatch):
+    clock, calls = _kick_setup(node, monkeypatch, v=0.3)
+    _odom(node, clock, v=0.4)
+    _step(node, clock, calls, 0.0)
+    _step(node, clock, calls, 0.2)
+    msg = Twist()
+    msg.angular.z = 0.5
+    node._on_cmd_vel(msg)
+    _odom(node, clock, w=0.6)                                  # even with wheels already moving
+    out = _step(node, clock, calls, 0.02)
+    assert [f for _, f in out] == pytest.approx([node._min_turn_duty] * 2)
+
+
+def test_without_wheel_odometry_the_breakaway_floor_stays(node, monkeypatch):
+    clock, calls = _kick_setup(node, monkeypatch, v=0.3)
+    _step(node, clock, calls, 0.0)
+    out = _step(node, clock, calls, 1.0)                       # no odom ever received
+    assert out[0][0] == pytest.approx(node._min_duty)
+    _odom(node, clock, v=0.4)
+    clock.t += 0.5                                             # odometry goes stale
+    out = _step(node, clock, calls, 0.0)
+    assert out[0][0] == pytest.approx(node._min_duty)
