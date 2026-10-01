@@ -92,7 +92,10 @@ class MotorNode(Node):
         # Measured 2026-10-01 with running_floor.py: kept rolling down to 8%
         # duty (0.19 m/s), stalled at 6% -> 0.11 (~0.4 m/s slowest straight).
         self.declare_parameter("min_running_duty_cycle", 0.11)
-        self.declare_parameter("min_running_turn_duty_cycle", 0.50)
+        # Measured 2026-10-01 with running_floor.py --pivot: kept turning down
+        # to 50% (42 deg/s), stalled at 48% -> 0.53 (~80 deg/s slowest pivot;
+        # the curve is steep: 60% already spun 147 deg/s).
+        self.declare_parameter("min_running_turn_duty_cycle", 0.53)
         self.declare_parameter("kick_duration_s", 0.15)
         self.declare_parameter("odom_topic", "odom")  # wheel_odom_node's raw wheel odometry
         self.declare_parameter("cmd_vel_timeout_s", 0.3)
